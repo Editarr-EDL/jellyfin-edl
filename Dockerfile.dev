@@ -1,0 +1,10 @@
+FROM mcr.microsoft.com/dotnet/sdk:10.0
+
+WORKDIR /workspace
+
+COPY . .
+
+RUN dotnet restore ./src/Jellyfin.Plugin.Edl/Jellyfin.Plugin.Edl.csproj \
+    && dotnet restore ./tests/Jellyfin.Plugin.Edl.Tests/Jellyfin.Plugin.Edl.Tests.csproj
+
+CMD ["bash"]
