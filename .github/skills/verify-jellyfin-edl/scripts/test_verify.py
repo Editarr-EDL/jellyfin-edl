@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import stat
 import subprocess
@@ -118,6 +119,12 @@ class RedactionTests(unittest.TestCase):
 
 
 SECRET = "synthetic-token-value"
+PASSWORD = "synthetic-password"
+
+
+def identity_of(path):
+    status = os.lstat(path)
+    return {"dev": status.st_dev, "inode": status.st_ino}
 
 
 class FakeDocker:
@@ -169,16 +176,94 @@ class FinishTests(unittest.TestCase):
                     "stopped": False}
         self.scratch = instance.new_scratch(self.run["runId"])
         self.run["scratch"] = str(self.scratch)
-        evidence.private_file(self.scratch / "secrets.json", {"password": "synthetic-password", "token": SECRET})
+        self.run["scratchIdentity"] = identity_of(self.scratch)
+        evidence.private_file(self.scratch / "secrets.json", {"password": PASSWORD, "token": SECRET})
         evidence.write_json(self.evidence / "drive.json", {"echo": SECRET})
         verify.save(self.evidence, self.run)
 
     def leaked(self):
-        return [p.name for p in self.evidence.rglob("*") if p.is_file() and SECRET.encode() in p.read_bytes()]
+        return [p.name for p in self.evidence.rglob("*")
+                if p.is_file() and any(s.encode() in p.read_bytes() for s in (SECRET, PASSWORD))]
 
     def finish_with(self, docker):
         with unittest.mock.patch.object(instance, "docker", docker):
             return verify.finish(self.evidence, evidence.read_json(self.evidence / "run.json"))
+
+    def snapshot(self):
+        return {path.name: path.read_bytes() for path in self.evidence.iterdir()}
+
+    def error_run(self):
+        """The in-memory run as command_run holds it after an error that echoed both secrets."""
+        run = evidence.read_json(self.evidence / "run.json")
+        run["error"] = f"RuntimeError: sign-in with {PASSWORD} returned token {SECRET}"
+        run["detail"] = {"attempts": [{"response": f"AccessToken={SECRET}"}]}
+        return run
+
+    def assert_final_metadata_clean(self):
+        self.assertEqual(self.leaked(), [])
+        persisted = evidence.read_json(self.evidence / "run.json")
+        self.assertEqual(persisted["error"], "RuntimeError: sign-in with [REDACTED] returned token [REDACTED]")
+        self.assertEqual(persisted["detail"], {"attempts": [{"response": "AccessToken=[REDACTED]"}]})
+        self.assertTrue(persisted["redacted"] and persisted["stopped"])
+        self.assertTrue(evidence.read_json(self.evidence / "cleanup.json")["clean"])
+        self.assertFalse(self.scratch.exists())
+
+    def assert_secret_free(self, run):
+        self.assertNotIn(SECRET, json.dumps(run))
+        self.assertNotIn(PASSWORD, json.dumps(run))
+
+    def test_an_error_naming_both_secrets_is_redacted_in_every_final_file(self):
+        run = self.error_run()
+        docker = FakeDocker(self.run["runId"])
+        with unittest.mock.patch.object(instance, "docker", docker):
+            self.assertTrue(verify.finish(self.evidence, run))
+        self.assert_final_metadata_clean()
+        self.assert_secret_free(run)
+        before = self.snapshot()
+        self.assertTrue(self.finish_with(docker))
+        self.assertEqual(before, self.snapshot())
+
+    def test_an_error_saved_before_cleanup_is_redacted_in_every_final_file(self):
+        verify.save(self.evidence, self.error_run())
+        self.assertTrue(self.finish_with(FakeDocker(self.run["runId"])))
+        self.assert_final_metadata_clean()
+
+    def test_an_interrupted_redaction_of_a_secret_error_retries_to_clean_metadata(self):
+        run = self.error_run()
+        docker = FakeDocker(self.run["runId"])
+        with unittest.mock.patch.object(instance, "docker", docker):
+            with unittest.mock.patch.object(evidence, "redact", side_effect=OSError("interrupted")):
+                with self.assertRaises(OSError):
+                    verify.finish(self.evidence, run)
+        self.assert_secret_free(run)
+        self.assertFalse(evidence.read_json(self.evidence / "run.json")["redacted"])
+        self.assert_retry_completes(docker)
+        self.assert_final_metadata_clean()
+        before = self.snapshot()
+        self.assertTrue(self.finish_with(docker))
+        self.assertEqual(before, self.snapshot())
+
+    def test_a_failed_final_rmdir_is_retried_to_a_clean_finish(self):
+        docker = FakeDocker(self.run["runId"])
+        real_rmdir = Path.rmdir
+
+        def interrupted_rmdir(path):
+            if path == self.scratch:
+                raise OSError("interrupted before the final rmdir")
+            return real_rmdir(path)
+
+        with unittest.mock.patch.object(Path, "rmdir", interrupted_rmdir):
+            self.assertFalse(self.finish_with(docker))
+        self.assertEqual(list(self.scratch.iterdir()), [])
+        self.assertTrue(self.finish_with(docker))
+        self.assertFalse(self.scratch.exists())
+        self.assertEqual(self.leaked(), [])
+        cleanup = evidence.read_json(self.evidence / "cleanup.json")
+        self.assertTrue(cleanup["clean"])
+        self.assertEqual([attempt["clean"] for attempt in cleanup["earlierAttempts"]], [False])
+        before = self.snapshot()
+        self.assertTrue(self.finish_with(docker))
+        self.assertEqual(before, self.snapshot())
 
     def assert_retry_completes(self, docker):
         self.assertTrue((self.scratch / "secrets.json").exists(), "secrets kept until redaction completes")
@@ -272,8 +357,10 @@ class ScratchOwnershipTests(unittest.TestCase):
         (self.outside / "locked").chmod(0o500)
         self.addCleanup((self.outside / "locked").chmod, 0o700)
 
-    def cleanup(self, run_id, scratch):
-        run = {"runId": run_id, "volumes": [f"{run_id}-config"], "scratch": str(scratch)}
+    def cleanup(self, run_id, scratch, identity=None):
+        if identity is None and os.path.lexists(scratch):
+            identity = identity_of(scratch)
+        run = {"runId": run_id, "volumes": [f"{run_id}-config"], "scratch": str(scratch), "scratchIdentity": identity}
         with unittest.mock.patch.object(instance, "docker", FakeDocker(run_id)):
             return instance.cleanup(run, self.root / "docker.log")
 
@@ -327,6 +414,26 @@ class ScratchOwnershipTests(unittest.TestCase):
         (own / "media").chmod(0o700)
         self.assertTrue(self.cleanup("jfedl-run-a", own)["clean"])
         self.assertFalse(own.exists())
+
+    def test_refuses_a_markerless_scratch_that_is_not_empty(self):
+        own = instance.new_scratch("jfedl-run-a")
+        (own / instance.SCRATCH_MARKER).unlink()
+        (own / "sentinel").write_text("kept")
+        self.assertFalse(self.cleanup("jfedl-run-a", own)["clean"])
+        self.assertEqual((own / "sentinel").read_text(), "kept")
+
+    def test_refuses_a_directory_that_replaced_the_recorded_scratch(self):
+        own = instance.new_scratch("jfedl-run-a")
+        recorded = identity_of(own)
+        shutil.rmtree(own)
+        own.mkdir()
+        self.assertNotEqual(identity_of(own), recorded)
+        self.assertFalse(self.cleanup("jfedl-run-a", own, recorded)["clean"], "empty and markerless")
+        self.assertTrue(own.is_dir())
+        (own / instance.SCRATCH_MARKER).write_text("jfedl-run-a")
+        (own / "sentinel").write_text("someone else's")
+        self.assertFalse(self.cleanup("jfedl-run-a", own, recorded)["clean"], "carrying a copied marker")
+        self.assertEqual((own / "sentinel").read_text(), "someone else's")
 
 
 if __name__ == "__main__":
