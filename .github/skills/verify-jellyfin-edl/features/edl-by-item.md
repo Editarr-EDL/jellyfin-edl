@@ -25,6 +25,7 @@ The unit tier covers the same route in `tests/Jellyfin.Plugin.Edl.Tests/EdlContr
 - Jellyfin in this image runs as root. A mode 000 fixture file is still readable inside the container, so the live tier cannot produce `personal_unreadable` without a non-root server.
 - The controller joins lines with a newline. It drops a trailing newline and converts CRLF. The exact body hash matches only payloads with LF line endings and no trailing newline, such as `edl-legacy`.
 - A 404 body is JSON problem details, not empty.
+- Jellyfin can answer `/System/Info/Public` before startup finishes, and adding the library during the startup scan can cancel that scan without running the requested one. Launch waits for `/health` to report `Healthy` and requests `/Library/Refresh` while the scan task is idle and movies are missing. Runs `jfedl-20261020t134139-d8c661` and `jfedl-20261021t013840-74d6bf` show each failure.
 - The server logs `Update Plugins` and may contact the default plugin repository. The library itself has internet metadata disabled.
 - `docker-compose.yml` names `jellyfin/jellyfin:12.0.0`, which Docker Hub does not publish. The helper uses its own pinned digest and never uses the compose service.
 - Verified on Docker Desktop for macOS on arm64 only.

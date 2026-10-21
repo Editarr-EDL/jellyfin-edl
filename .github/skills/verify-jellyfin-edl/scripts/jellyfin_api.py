@@ -97,8 +97,18 @@ def add_movie_library(client: Jellyfin, name: str, path: str) -> None:
                            "SaveLocalMetadata": False, "TypeOptions": [no_fetchers]}})
 
 
+def library_scan_idle(client: Jellyfin) -> bool:
+    tasks = client.expect("GET", "/ScheduledTasks", (200,)).json()
+    return any(task.get("Key") == "RefreshLibrary" and task.get("State") == "Idle" for task in tasks)
+
+
 def wait_for_movies(client: Jellyfin, paths: set, timeout: float) -> dict:
-    """Poll until every expected media path is a Movie item; return path -> item ID."""
+    """Poll until every expected media path is a Movie item; return path -> item ID.
+
+    Adding a library during the startup scan can cancel that scan without
+    running the requested one, so an idle scan task with items missing gets
+    a new /Library/Refresh.
+    """
     deadline = time.monotonic() + timeout
     found = {}
     while time.monotonic() < deadline:
@@ -106,6 +116,8 @@ def wait_for_movies(client: Jellyfin, paths: set, timeout: float) -> dict:
         found = {item["Path"]: item["Id"] for item in items if item.get("Path") in paths}
         if len(found) == len(paths):
             return found
+        if library_scan_idle(client):
+            client.expect("POST", "/Library/Refresh", (200, 204))
         time.sleep(3)
     missing = sorted(paths - set(found))
     raise TimeoutError(f"{len(missing)} synthetic movies were not indexed within {timeout:.0f}s: {missing}")

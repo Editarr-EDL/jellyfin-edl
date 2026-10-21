@@ -68,6 +68,26 @@ class ReadinessTests(unittest.TestCase):
         self.assertEqual(info, {"Version": "12.0.0"})
         self.assertEqual(requests, ["/health", "/health", "/System/Info/Public"])
 
+    def test_an_idle_scan_with_missing_movies_requests_another_scan(self):
+        scans = ["Idle"]
+        requests = []
+
+        class Server(jellyfin_api.Jellyfin):
+            def request(self, method, path, body=None, authenticated=True):
+                requests.append(f"{method} {path.split('?')[0]}")
+                if path == "/ScheduledTasks":
+                    return jellyfin_api.Response(200, {}, json.dumps([{"Key": "RefreshLibrary", "State": scans[-1]}]).encode())
+                if path == "/Library/Refresh":
+                    scans.append("Completed")
+                    return jellyfin_api.Response(204, {}, b"")
+                items = [{"Path": "/media/a.mkv", "Id": "1"}] if scans[-1] == "Completed" else []
+                return jellyfin_api.Response(200, {}, json.dumps({"Items": items}).encode())
+
+        with unittest.mock.patch.object(jellyfin_api.time, "sleep"):
+            found = jellyfin_api.wait_for_movies(Server("http://127.0.0.1:1", "test"), {"/media/a.mkv"}, 60)
+        self.assertEqual(found, {"/media/a.mkv": "1"})
+        self.assertEqual(requests, ["GET /Items", "GET /ScheduledTasks", "POST /Library/Refresh", "GET /Items"])
+
 
 class RedactionTests(unittest.TestCase):
     def test_replaces_every_secret_and_reports_counts(self):
