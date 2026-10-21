@@ -42,7 +42,7 @@ The helper pins two images in `scripts/instance.py`.
 4. Encodes a two-second synthetic test pattern with the Jellyfin image's own FFmpeg.
 5. Writes one movie folder per EDL selection case in the fixture (14 folders), with that case's sidecar files.
 6. Creates two labelled volumes and a container that publishes port 8096 on `127.0.0.1` at a random host port. It mounts the media read-only and copies the plugin into `/config/plugins/Jellyfin.Plugin.Edl`.
-7. Waits for `/System/Info/Public`, completes the startup wizard with a generated administrator password, signs in, and adds a movie library with internet metadata and image fetchers disabled.
+7. Waits until `/health` answers `Healthy`, records `/System/Info/Public`, completes the startup wizard with a generated administrator password, signs in, and adds a movie library with internet metadata and image fetchers disabled.
 
 The instance is ready when all 14 synthetic movies are indexed. Launch prints the evidence directory and the port.
 

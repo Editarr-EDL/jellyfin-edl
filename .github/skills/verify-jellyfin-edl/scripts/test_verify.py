@@ -6,9 +6,11 @@ import json
 import stat
 import tempfile
 import unittest
+import unittest.mock
 from pathlib import Path
 
 import evidence
+import jellyfin_api
 import library
 from verify import FIXTURE
 
@@ -46,6 +48,25 @@ class LibraryTests(unittest.TestCase):
                              / "5a4de0c29b1e4f3a8c6d0e1f2a3b4c5d" / "Movie.user-5a4de0c29b1e4f3a8c6d0e1f2a3b4c5d.edl").is_dir())
             self.assertEqual(len(written), 14 + sum(len(c["entries"]) for c in library.edl_cases(self.manifest)))
             personal.chmod(0o600)
+
+
+class ReadinessTests(unittest.TestCase):
+    def test_public_info_alone_is_not_ready(self):
+        health = [b"Jellyfin Server is loading.", b"Healthy"]
+        requests = []
+
+        class Server(jellyfin_api.Jellyfin):
+            def request(self, method, path, body=None, authenticated=True):
+                requests.append(path)
+                if path == "/health":
+                    text = health.pop(0)
+                    return jellyfin_api.Response(200 if text == b"Healthy" else 503, {}, text)
+                return jellyfin_api.Response(200, {}, b'{"Version": "12.0.0"}')
+
+        with unittest.mock.patch.object(jellyfin_api.time, "sleep"):
+            info = jellyfin_api.wait_ready(Server("http://127.0.0.1:1", "test"), 60)
+        self.assertEqual(info, {"Version": "12.0.0"})
+        self.assertEqual(requests, ["/health", "/health", "/System/Info/Public"])
 
 
 class RedactionTests(unittest.TestCase):

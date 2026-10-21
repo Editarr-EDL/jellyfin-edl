@@ -53,17 +53,21 @@ class Jellyfin:
 
 
 def wait_ready(client: Jellyfin, timeout: float) -> dict:
-    """Poll the public info route until the server answers with JSON."""
+    """Poll until /health reports Healthy, then return the public server info.
+
+    /System/Info/Public can answer 200 while startup is still finishing, and the
+    next request can then find the connection closed.
+    """
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         try:
-            response = client.request("GET", "/System/Info/Public", authenticated=False)
-            if response.status == 200:
-                return response.json()
+            health = client.request("GET", "/health", authenticated=False)
+            if health.status == 200 and health.body.strip() == b"Healthy":
+                return client.expect("GET", "/System/Info/Public", (200,)).json()
         except (urllib.error.URLError, ConnectionError, TimeoutError):
             pass
         time.sleep(2)
-    raise TimeoutError(f"Jellyfin did not answer /System/Info/Public within {timeout:.0f}s")
+    raise TimeoutError(f"Jellyfin did not report Healthy on /health within {timeout:.0f}s")
 
 
 def complete_wizard(client: Jellyfin, username: str, password: str) -> None:
