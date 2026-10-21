@@ -99,7 +99,7 @@ def launch(directory: Path, run: dict) -> None:
     log = directory / "docker.log"
     run["images"] = instance.preflight([instance.SDK_IMAGE, instance.JELLYFIN_IMAGE])
     manifest = library.load_manifest(FIXTURE)
-    scratch = instance.new_scratch()
+    scratch = instance.new_scratch(run["runId"])
     run_id = run["runId"]
     run.update({"scratch": str(scratch), "container": f"{run_id}-jellyfin", "port": None,
                 "volumes": [f"{run_id}-config", f"{run_id}-cache"], "image": instance.JELLYFIN_IMAGE,
@@ -207,24 +207,43 @@ def drive(directory: Path) -> bool:
     return ok
 
 
-def finish(directory: Path, run: dict) -> bool:
-    """Capture logs, remove run-owned resources, then redact and keep the evidence.
+def write_report(path: Path, report: dict) -> None:
+    """Write a cleanup or redaction report, keeping any earlier attempts it replaces."""
+    if path.exists():
+        previous = evidence.read_json(path)
+        report["earlierAttempts"] = previous.pop("earlierAttempts", []) + [previous]
+    evidence.write_json(path, report)
 
-    A repeat after a clean cleanup changes nothing, so it cannot overwrite the
-    first cleanup and redaction reports.
+
+def finish(directory: Path, run: dict) -> bool:
+    """Capture logs, redact the evidence, then remove run-owned resources.
+
+    Success needs a completed redaction and a clean cleanup, recorded as
+    `redacted` and `stopped` in run.json. Scratch holds the only copy of the
+    secrets, so logs are captured and redacted only while it exists, and
+    cleanup removes it only after redaction. A retry redoes what an
+    interruption left unfinished; a repeat after success changes nothing.
     """
-    if run.get("stopped") and evidence.read_json(directory / "cleanup.json")["clean"]:
+    if run.get("stopped") and run.get("redacted") and evidence.read_json(directory / "cleanup.json")["clean"]:
         return True
-    hidden = list(secrets_of(run).values()) if run.get("scratch") else []
-    log = directory / "docker.log"
-    if run.get("container") and not run.get("stopped"):
+    have_secrets = bool(run.get("scratch")) and Path(run["scratch"]).exists()
+    if not run.get("redacted") and run.get("scratch") and not have_secrets:
+        raise RuntimeError("scratch secrets are gone before redaction completed; evidence kept for manual review")
+    hidden = list(secrets_of(run).values()) if have_secrets else []
+    if run.get("container") and have_secrets:
         logs = instance.docker("logs", run["container"], check=False)
-        (directory / "jellyfin.log").write_text(logs.stdout + logs.stderr)
-    report = instance.cleanup(run, log) if run.get("scratch") else {"clean": True, "steps": [], "errors": []}
-    evidence.write_json(directory / "cleanup.json", report)
+        if logs.returncode == 0:
+            run["redacted"] = False
+            save(directory, run)
+            (directory / "jellyfin.log").write_text(logs.stdout + logs.stderr)
+    if not run.get("redacted"):
+        write_report(directory / "redaction.json", evidence.redact(directory, hidden))
+        run["redacted"] = True
+        save(directory, run)
+    report = instance.cleanup(run, directory / "docker.log") if run.get("scratch") else {"clean": True, "steps": [], "errors": []}
+    write_report(directory / "cleanup.json", report)
     run["stopped"] = True
     save(directory, run)
-    evidence.write_json(directory / "redaction.json", evidence.redact(directory, hidden))
     return report["clean"]
 
 
@@ -242,7 +261,11 @@ def command_run(argv: list) -> int:
     except Exception as error:
         code, run["error"] = 1, f"{type(error).__name__}: {error}"
     finally:
-        clean = finish(directory, run)
+        try:
+            clean = finish(directory, run)
+        except Exception as error:
+            clean = False
+            print(f"cleanup failed, retry with verify.py cleanup: {type(error).__name__}: {error}")
     if not clean:
         code = code or 1
     print(f"{['PASS', 'FAIL', 'BLOCKED'][code]} jellyfin-http commit {run['commit']} {run.get('error', '')}\n"

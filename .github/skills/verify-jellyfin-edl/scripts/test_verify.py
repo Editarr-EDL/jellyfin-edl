@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import shutil
 import stat
 import subprocess
 import tempfile
@@ -122,30 +123,29 @@ SECRET = "synthetic-token-value"
 class FakeDocker:
     """Docker CLI stand-in that tracks one run's containers and volumes. Docker is the mocked boundary."""
 
-    def __init__(self, run_id, failing_removals=0):
-        self.label = f"label={instance.LABEL}={run_id}"
+    def __init__(self, run_id, fail_once=()):
         self.run_id = run_id
         self.containers = {"c1"}
         self.volumes = {f"{run_id}-config"}
-        self.failing_removals = failing_removals
+        self.fail_once = set(fail_once)
 
     def __call__(self, *args, check=True, log=None):
         out, code = "", 0
-        if args[0] == "logs":
-            out, code = (f"server log {SECRET}\n", 0) if self.containers else ("", 1)
+        command = " ".join(args[:2]) if args[0] == "volume" else args[0]
+        if command in self.fail_once:
+            self.fail_once.discard(command)
+            code = 1
+        elif args[0] == "logs":
+            out, code = (f"server log {SECRET}\n", 0) if self.containers else ("Error: No such container", 1)
         elif args[0] == "ps":
             out = "\n".join(sorted(self.containers))
         elif args[0] == "rm":
-            if self.failing_removals:
-                self.failing_removals -= 1
-                code = 1
-            else:
-                self.containers.discard(args[-1])
-        elif args[:2] == ("volume", "inspect"):
+            self.containers.discard(args[-1])
+        elif command == "volume inspect":
             out, code = (self.run_id, 0) if args[-1] in self.volumes else ("", 1)
-        elif args[:2] == ("volume", "rm"):
+        elif command == "volume rm":
             self.volumes.discard(args[-1])
-        elif args[:2] == ("volume", "ls"):
+        elif command == "volume ls":
             out = "\n".join(sorted(self.volumes))
         if check and code:
             raise RuntimeError(f"docker {args[0]} failed")
@@ -214,7 +214,7 @@ class FinishTests(unittest.TestCase):
         self.assert_retry_completes(docker)
 
     def test_failed_container_removal_keeps_scratch_and_earlier_reports_until_a_retry_succeeds(self):
-        docker = FakeDocker(self.run["runId"], failing_removals=1)
+        docker = FakeDocker(self.run["runId"], fail_once={"rm"})
         self.assertFalse(self.finish_with(docker))
         failed = evidence.read_json(self.evidence / "cleanup.json")
         self.assertFalse(failed["clean"])
@@ -226,6 +226,31 @@ class FinishTests(unittest.TestCase):
         before = {path.name: path.read_bytes() for path in self.evidence.iterdir()}
         self.assertTrue(self.finish_with(docker))
         self.assertEqual(before, {path.name: path.read_bytes() for path in self.evidence.iterdir()})
+
+    def test_a_retry_after_the_container_is_gone_keeps_the_captured_server_log(self):
+        docker = FakeDocker(self.run["runId"], fail_once={"volume rm"})
+        self.assertFalse(self.finish_with(docker))
+        captured = (self.evidence / "jellyfin.log").read_bytes()
+        self.assertIn(b"server log [REDACTED]", captured)
+        self.assert_retry_completes(docker)
+        self.assertEqual((self.evidence / "jellyfin.log").read_bytes(), captured)
+
+    def test_a_stopped_run_whose_secrets_vanished_before_redaction_is_not_a_success(self):
+        evidence.write_json(self.evidence / "cleanup.json", {"clean": True, "steps": [], "errors": []})
+        verify.save(self.evidence, dict(self.run, stopped=True))
+        shutil.rmtree(self.scratch)
+        with self.assertRaises(RuntimeError):
+            self.finish_with(FakeDocker(self.run["runId"]))
+        self.assertEqual(self.leaked(), ["drive.json"])
+        self.assertFalse((self.evidence / "jellyfin.log").exists(), "no log captured that could not be redacted")
+
+    def test_a_retry_without_secrets_does_not_capture_an_unredactable_log(self):
+        evidence.write_json(self.evidence / "drive.json", {"echo": "redacted earlier"})
+        verify.save(self.evidence, dict(self.run, redacted=True))
+        shutil.rmtree(self.scratch)
+        self.assertTrue(self.finish_with(FakeDocker(self.run["runId"])))
+        self.assertEqual(self.leaked(), [])
+        self.assertFalse((self.evidence / "jellyfin.log").exists())
 
 
 class ScratchOwnershipTests(unittest.TestCase):
@@ -289,6 +314,19 @@ class ScratchOwnershipTests(unittest.TestCase):
         self.assertFalse(own.exists())
         self.assert_outside_untouched()
         self.assertEqual(self.cleanup("jfedl-run-a", own)["clean"], True)
+
+    def test_a_partial_scratch_removal_is_reported_and_a_retry_finishes_it(self):
+        own = instance.new_scratch("jfedl-run-a")
+        (own / "media").mkdir()
+        (own / "media" / "file").write_text("x")
+        (own / "media").chmod(0o500)
+        first = self.cleanup("jfedl-run-a", own)
+        self.assertFalse(first["clean"])
+        self.assertTrue(first["errors"])
+        self.assertTrue(own.exists())
+        (own / "media").chmod(0o700)
+        self.assertTrue(self.cleanup("jfedl-run-a", own)["clean"])
+        self.assertFalse(own.exists())
 
 
 if __name__ == "__main__":

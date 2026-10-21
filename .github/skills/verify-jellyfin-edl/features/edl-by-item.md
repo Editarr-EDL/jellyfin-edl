@@ -5,7 +5,7 @@ A Jellyfin client asks the plugin for the EDL of a library video. The plugin res
 ## Sub-features
 
 - `GET /Plugins/Edl/ByItem/{itemId}` returns 200 `text/plain` with the file's lines for a valid sidecar.
-- A sidecar that fails `EdlParser.Validate` returns 422 with JSON `diagnostics`.
+- A sidecar that fails `EdlParser.Validate` returns 422 with a JSON `Diagnostics` array of `LineNumber` and `Message`.
 - A missing item, a non-video item, an item without a local path, or a missing sidecar returns 404.
 - A request without a Jellyfin token returns 401.
 
@@ -15,7 +15,9 @@ Sign in to Jellyfin and call the route with the session's access token in the `A
 
 ## Driving it with verify.py
 
-`verify.py run` launches Jellyfin 12.0.0 with 14 synthetic movies, one per EDL selection case in `tests/fixtures/export-layout-v1`. It drives the route once without a token and once per movie with the administrator token. `drive.json` records each status and body hash against the legacy expectation.
+`verify.py run` launches Jellyfin 12.0.0 with 14 synthetic movies, one per EDL selection case in `tests/fixtures/export-layout-v1`. It drives the route once without a token (401) and once per movie with the administrator token. The legacy rule yields five 200 and nine 404 responses for these cases. `drive.json` records each status and body hash against the legacy expectation.
+
+The live drive does not request a 422, because no fixture case puts an invalid file at the adjacent path. The unit tier covers 422, and a reviewer's separate live request outside `verify.py` returned it once.
 
 The unit tier covers the same route in `tests/Jellyfin.Plugin.Edl.Tests/EdlControllerTests.cs` and `Contract/SelectionCaseTests.cs`. Those tests call the controller directly. They do not prove the live route.
 
@@ -23,7 +25,7 @@ The unit tier covers the same route in `tests/Jellyfin.Plugin.Edl.Tests/EdlContr
 
 - The plugin ignores personal and default files. Cases whose planned contract outcome is `personal` or `default` return the legacy file or 404 today. That is the expected baseline until personal selection ships.
 - Jellyfin in this image runs as root. A mode 000 fixture file is still readable inside the container, so the live tier cannot produce `personal_unreadable` without a non-root server.
-- The controller joins lines with a newline. It drops a trailing newline and converts CRLF. The exact body hash matches only payloads with LF line endings and no trailing newline, such as `edl-legacy`.
+- The controller reads lines and rejoins them with `\n`. It drops a trailing newline and any CR. The drive's exact body hash holds only because all five 200 cases serve `edl-legacy`, which has LF line endings and no trailing newline. It is not a general byte-preservation check.
 - A 404 body is JSON problem details, not empty.
 - Jellyfin can answer `/System/Info/Public` before startup finishes, and adding the library during the startup scan can cancel that scan without running the requested one. Launch waits for `/health` to report `Healthy` and requests `/Library/Refresh` while the scan task is idle and movies are missing. Runs `jfedl-20261020t134139-d8c661` and `jfedl-20261021t013840-74d6bf` show each failure.
 - The server logs `Update Plugins` and may contact the default plugin repository. The library itself has internet metadata disabled.

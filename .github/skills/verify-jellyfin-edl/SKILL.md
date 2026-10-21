@@ -27,9 +27,9 @@ Exit codes are 0 for pass, 1 for fail, 2 for a missing prerequisite, and 64 for 
 - `python3` 3.9 or newer and `git`.
 - Network access for NuGet restore inside the SDK container on every run, and for the first pull of the pinned images.
 
-The helper pins two images in `scripts/instance.py`.
+The helper names two images in `scripts/instance.py`. Only Jellyfin is pinned by digest.
 
-- `mcr.microsoft.com/dotnet/sdk:10.0` builds and tests the net10.0 projects. Each run records its image ID.
+- `mcr.microsoft.com/dotnet/sdk:10.0` builds and tests the net10.0 projects. The `10.0` tag moves when Microsoft publishes a new SDK, so each run records the resolved image ID in `run.json` under `images`.
 - `jellyfin/jellyfin@sha256:baba630419915985442f315f08b0cf46d9f4c8a0cc4bd38e94a6d35751dd5ef5`, published as `jellyfin/jellyfin:12.0.20260908-012347`. It reports server version 12.0.0, which matches the `Jellyfin.Controller` 12.0.0 package. Doctor fails on any other version.
 
 ## Launch
@@ -52,7 +52,7 @@ The instance is ready when all 14 synthetic movies are indexed. Launch prints th
 python3 .github/skills/verify-jellyfin-edl/scripts/verify.py doctor artifacts/verify/<run-id>
 ```
 
-Doctor is read-only. Run it before the first drive and after any failure. It checks that:
+Doctor changes nothing in the instance. It writes `doctor.json` in the evidence directory and replaces any earlier one, so copy a passing `doctor.json` before running doctor again after cleanup. Run it before the first drive and after any failure. It checks that:
 
 - the container is running, carries this run's label, and uses the pinned image;
 - the port is published on `127.0.0.1` only;
@@ -66,20 +66,21 @@ Doctor is read-only. Run it before the first drive and after any failure. It che
 python3 .github/skills/verify-jellyfin-edl/scripts/verify.py drive artifacts/verify/<run-id>
 ```
 
-The drive sends one request without a token and expects 401. It then requests `GET /Plugins/Edl/ByItem/{itemId}` with the administrator token for each of the 14 items. The expected result comes from the current plugin's documented rule in `scripts/library.py` (`legacy_expectation`). Only the adjacent `<stem>.edl` is read. A valid file returns 200 `text/plain` with the payload's exact SHA-256. An invalid file returns 422. Anything else returns 404. Each result also records the case's planned contract outcome, which the current plugin does not implement.
+The drive sends one request without a token and expects 401. It then requests `GET /Plugins/Edl/ByItem/{itemId}` with the administrator token for each of the 14 items. The expected result comes from the current plugin's documented rule in `scripts/library.py` (`legacy_expectation`). Only the adjacent `<stem>.edl` is read: a valid file gives 200, an invalid one 422, and anything else 404. Against this fixture that rule yields five 200 and nine 404 responses. No fixture case puts an invalid file at the adjacent path, so the drive never requests a 422. The unit tier covers 422 through the controller. For each 200 the drive also requires `text/plain` and a body SHA-256 equal to the fixture payload's. All five serve `edl-legacy`, which has LF line endings and no trailing newline. The controller rejoins lines with `\n`, so files with CR or a trailing newline are not served byte for byte. Each result also records the case's planned contract outcome, which the current plugin does not implement.
 
 The token lives only in `secrets.json` (mode 0600) in the run's scratch directory. Do not print it or pass it on a command line. To add a request, extend `drive` in `scripts/verify.py`, which uses `jellyfin_api.Jellyfin`.
 
 ## Evidence
 
-Each run writes `artifacts/verify/<run-id>/`. The `artifacts/` directory is ignored by Git.
+Each run writes `artifacts/verify/<run-id>/`. The `artifacts/` directory is ignored by Git. Evidence files are ordinary files (mode 0644) and hold no secrets.
 
-- `run.json` holds the run ID, the plugin commit, the count of uncommitted paths, the image IDs, the container and volume names, the port, the plugin DLL hash, and `stopped`.
+- `run.json` holds the run ID, the plugin commit, the count of uncommitted paths, the image IDs, the container and volume names, the port, the scratch path, the plugin DLL hash, and the cleanup state `redacted` and `stopped`.
 - `doctor.json` and `drive.json` hold each check and each request with its status, content type, body hash, and body for 200 responses.
 - `server-public.json`, `items.json`, and `library.json` record the server, the indexed item IDs, and the synthetic files.
-- `build.log`, `docker.log`, and `jellyfin.log` hold the build, every Docker command, and the server log captured before removal.
-- `cleanup.json` lists each cleanup step and any leftover containers, volumes, or scratch directory.
+- `build.log`, `docker.log`, and `jellyfin.log` hold the build, every Docker command, and the server log.
+- `cleanup.json` lists each cleanup step, its errors, and any leftover containers, volumes, or scratch directory.
 - `redaction.json` reports how many secrets were scanned and replaced. The helper fails if a secret survives.
+- When cleanup is retried, `cleanup.json` and `redaction.json` keep the replaced reports under `earlierAttempts`.
 - The unit tier writes `dotnet-test.log`, `dotnet-test.trx`, and the counters in `run.json`.
 
 A proof for a commit needs `dirtyPaths` equal to 0 in `run.json`. A run on an uncommitted tree proves only the working copy.
@@ -90,7 +91,11 @@ A proof for a commit needs `dirtyPaths` equal to 0 in `run.json`. A run on an un
 python3 .github/skills/verify-jellyfin-edl/scripts/verify.py cleanup artifacts/verify/<run-id>
 ```
 
-Cleanup captures the server log, then removes only containers and volumes labelled `jfedl.run=<run-id>` and the recorded scratch directory under the system temp directory. It never removes evidence. Repeating it after a clean cleanup changes nothing, and repeating it after an unclean one retries the removal. `verify.py run --inject-failure` fails after the drive and proves that cleanup still runs and the evidence survives. Never stop containers by name pattern or prune Docker.
+Cleanup captures the server log, redacts the evidence, and then removes only containers and volumes labelled `jfedl.run=<run-id>` and the recorded scratch directory. It never removes evidence.
+
+The scratch `secrets.json` (mode 0600) is the only copy of the password and token, and redaction needs it. Cleanup therefore redacts first. It keeps scratch until the containers and volumes are gone, so a retry can still capture and redact the server log. It removes scratch only when the path is a real directory, not a symlink, directly under the system temp directory, and it contains a `.jfedl-run` marker naming this run. It removes the marker last and never follows a symlink inside scratch.
+
+Cleanup succeeds only when redaction completed and every resource is gone. Any other outcome exits 1, keeps the evidence, and reports the errors in `cleanup.json` or on the console. Rerun `verify.py cleanup` after fixing the cause; it repeats only the unfinished work. Repeating it after a success changes nothing. If scratch disappears before redaction finished, cleanup refuses to report success, because it can no longer prove the evidence is clean. `verify.py run --inject-failure` fails after the drive and proves that cleanup still runs and the evidence survives. Never stop containers by name pattern or prune Docker.
 
 ## Helpers
 
@@ -100,7 +105,7 @@ Cleanup captures the server log, then removes only containers and volumes labell
 - `scripts/library.py` lays out the fixture cases on disk and holds the legacy expectation.
 - `scripts/evidence.py` writes evidence and redacts secrets.
 
-The repository's `scripts/` directory remains the manual harness. The helper covers the same ground without calling it. It stages the four files `stage-plugin.sh` stages, and its drive covers the 401, 200, 404, and 422 checks of `jellyfin-smoke.sh` and `run-edl-matrix.sh`. Those scripts write build output into the checkout, target the unpublished `jellyfin/jellyfin:12.0.0` Compose service, and pass the API key on the `curl` command line.
+The repository's `scripts/` directory remains the manual harness. The helper covers part of its ground without calling it. It stages the four files `stage-plugin.sh` stages, and its drive covers the 401, 200, and 404 checks of `jellyfin-smoke.sh` and `run-edl-matrix.sh`, but not their live 422 check. Those scripts write build output into the checkout, target the unpublished `jellyfin/jellyfin:12.0.0` Compose service, and pass the API key on the `curl` command line.
 
 Test the helper itself without writing bytecode into the checkout.
 

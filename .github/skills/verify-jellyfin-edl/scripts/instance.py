@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import os
 import shutil
+import stat
 import subprocess
 import tempfile
 from pathlib import Path
@@ -20,6 +21,7 @@ FFMPEG = "/usr/lib/jellyfin-ffmpeg/ffmpeg"
 PLUGIN_DIR = "Jellyfin.Plugin.Edl"
 PLUGIN_FILES = ("Jellyfin.Plugin.Edl.dll", "Jellyfin.Plugin.Edl.deps.json", "Jellyfin.Plugin.Edl.pdb", "Jellyfin.Plugin.Edl.xml")
 SCRATCH_PREFIX = "jfedl-verify-"
+SCRATCH_MARKER = ".jfedl-run"
 LABEL = "jfedl.run"
 COPY_SOURCE = ("mkdir -p /tmp/work && tar -C /src --exclude=.git --exclude=bin --exclude=obj "
                "--exclude=artifacts --exclude=dev -cf - . | tar -C /tmp/work -xf - && cd /tmp/work")
@@ -56,8 +58,25 @@ def preflight(images: list) -> dict:
     return facts
 
 
-def new_scratch() -> Path:
-    return Path(tempfile.mkdtemp(prefix=SCRATCH_PREFIX)).resolve()
+def new_scratch(run_id: str) -> Path:
+    """Create a private temp directory marked with the run ID that cleanup requires before removing it."""
+    scratch = Path(tempfile.mkdtemp(prefix=SCRATCH_PREFIX)).resolve()
+    (scratch / SCRATCH_MARKER).write_text(run_id)
+    return scratch
+
+
+def check_owned_scratch(scratch: Path, run_id: str) -> None:
+    """Raise unless scratch is a real directory in the temp root that carries this run's marker.
+
+    Uses lstat throughout, so a symlinked root or marker is refused without following it.
+    """
+    if not stat.S_ISDIR(os.lstat(scratch).st_mode):
+        raise RuntimeError("recorded scratch path is a symlink or not a directory")
+    if not scratch.name.startswith(SCRATCH_PREFIX) or scratch.parent != Path(tempfile.gettempdir()).resolve():
+        raise RuntimeError("recorded scratch path is not a run-owned temp directory")
+    marker = scratch / SCRATCH_MARKER
+    if not os.path.lexists(marker) or not stat.S_ISREG(os.lstat(marker).st_mode) or marker.read_text() != run_id:
+        raise RuntimeError("recorded scratch directory does not carry this run's marker")
 
 
 def user_flag() -> str:
@@ -124,7 +143,11 @@ def owned_volume(name: str, run_id: str) -> bool:
 
 
 def cleanup(run: dict, log: Path) -> dict:
-    """Remove only this run's containers, volumes, and scratch directory. Safe to repeat."""
+    """Remove only this run's containers, volumes, and scratch directory. Safe to repeat.
+
+    Scratch holds the run's only copy of its secrets, so it stays until the
+    containers and volumes are gone and a retry can still capture and redact logs.
+    """
     run_id = run["runId"]
     steps, errors = [], []
 
@@ -149,14 +172,21 @@ def cleanup(run: dict, log: Path) -> dict:
 
     def remove_scratch() -> str:
         scratch = Path(run["scratch"])
-        if not scratch.exists():
+        if not os.path.lexists(scratch):
             return "absent"
-        if not scratch.name.startswith(SCRATCH_PREFIX) or scratch.parent != Path(tempfile.gettempdir()).resolve():
-            raise RuntimeError("recorded scratch path is not a run-owned temp directory")
-        for path in scratch.rglob("*"):
-            if not path.is_symlink():
-                path.chmod(0o700 if path.is_dir() else 0o600)
-        shutil.rmtree(scratch)
+        if errors:
+            return "kept until containers and volumes are removed"
+        check_owned_scratch(scratch, run_id)
+        for child in scratch.iterdir():
+            if child.name == SCRATCH_MARKER:
+                continue
+            if stat.S_ISDIR(os.lstat(child).st_mode):
+                shutil.rmtree(child)
+            else:
+                child.unlink()
+        # The marker goes last so a retry after a partial removal can still prove ownership.
+        (scratch / SCRATCH_MARKER).unlink()
+        scratch.rmdir()
         return "removed"
 
     step("containers", remove_containers)
@@ -165,7 +195,7 @@ def cleanup(run: dict, log: Path) -> dict:
     leftovers = {
         "containers": docker("ps", "-aq", "--filter", f"label={LABEL}={run_id}", check=False).stdout.split(),
         "volumes": docker("volume", "ls", "-q", "--filter", f"label={LABEL}={run_id}", check=False).stdout.split(),
-        "scratchExists": Path(run["scratch"]).exists(),
+        "scratchExists": os.path.lexists(run["scratch"]),
     }
     clean = not errors and not leftovers["containers"] and not leftovers["volumes"] and not leftovers["scratchExists"]
     return {"steps": steps, "errors": errors, "leftovers": leftovers, "clean": clean}
