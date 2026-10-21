@@ -90,7 +90,7 @@ A proof for a commit needs `dirtyPaths` equal to 0 in `run.json`. A run on an un
 python3 .github/skills/verify-jellyfin-edl/scripts/verify.py cleanup artifacts/verify/<run-id>
 ```
 
-Cleanup captures the server log, then removes only containers and volumes labelled `jfedl.run=<run-id>` and the recorded scratch directory under the system temp directory. It never removes evidence. Repeating it is safe. `verify.py run --inject-failure` fails after the drive and proves that cleanup still runs and the evidence survives. Never stop containers by name pattern or prune Docker.
+Cleanup captures the server log, then removes only containers and volumes labelled `jfedl.run=<run-id>` and the recorded scratch directory under the system temp directory. It never removes evidence. Repeating it after a clean cleanup changes nothing, and repeating it after an unclean one retries the removal. `verify.py run --inject-failure` fails after the drive and proves that cleanup still runs and the evidence survives. Never stop containers by name pattern or prune Docker.
 
 ## Helpers
 

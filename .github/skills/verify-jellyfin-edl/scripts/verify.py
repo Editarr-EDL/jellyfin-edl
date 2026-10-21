@@ -208,7 +208,13 @@ def drive(directory: Path) -> bool:
 
 
 def finish(directory: Path, run: dict) -> bool:
-    """Capture logs, remove run-owned resources, then redact and keep the evidence."""
+    """Capture logs, remove run-owned resources, then redact and keep the evidence.
+
+    A repeat after a clean cleanup changes nothing, so it cannot overwrite the
+    first cleanup and redaction reports.
+    """
+    if run.get("stopped") and evidence.read_json(directory / "cleanup.json")["clean"]:
+        return True
     hidden = list(secrets_of(run).values()) if run.get("scratch") else []
     log = directory / "docker.log"
     if run.get("container") and not run.get("stopped"):

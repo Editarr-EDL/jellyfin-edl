@@ -12,6 +12,7 @@ from pathlib import Path
 import evidence
 import jellyfin_api
 import library
+import verify
 from verify import FIXTURE
 
 
@@ -90,6 +91,16 @@ class ReadinessTests(unittest.TestCase):
 
 
 class RedactionTests(unittest.TestCase):
+    def test_repeated_cleanup_keeps_the_first_reports(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            run = {"runId": "jfedl-test", "scratch": str(root / "gone"), "stopped": True}
+            evidence.write_json(root / "run.json", run)
+            evidence.write_json(root / "cleanup.json", {"clean": True, "steps": ["first"]})
+            evidence.write_json(root / "redaction.json", {"files": 10, "replacements": 0, "secrets": 2})
+            before = {path.name: path.read_bytes() for path in root.iterdir()}
+            self.assertTrue(verify.finish(root, run))
+            self.assertEqual(before, {path.name: path.read_bytes() for path in root.iterdir()})
     def test_replaces_every_secret_and_reports_counts(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
