@@ -96,6 +96,7 @@ public sealed class McfValidationTests : IDisposable
         ["Arabic-Indic hour digits"] = Invalid(V11 + "NOTE\nSTART ٠٠:00:00.000\nEND 00:10:00.000\n\n", 4, "MCF timestamp is invalid"),
         ["fullwidth millisecond digits"] = Invalid(V11 + "NOTE\nSTART 00:00:00.０００\nEND 00:10:00.000\n\n", 4, "MCF timestamp is invalid"),
         ["mathematical bold cue hour digits"] = Invalid(V11 + Bounds + "𝟎𝟎:00:05.000 --> 00:00:08.000\nviolence=high\n", 7, "MCF cue timing is invalid"),
+        ["Arabic-Indic cue hour digits"] = Invalid(V11 + Bounds + "٠٠:00:05.000 --> 00:00:08.000\nviolence=high\n", 7, "MCF cue timing is invalid"),
         ["Arabic-Indic year digit"] = Invalid(V11 + "NOTE\nYEAR 1٢\n\n" + Bounds, 4, "MCF year must be a non-negative integer"),
         ["Devanagari season digit"] = Invalid(V11 + "NOTE\nSEASON 1०\n\n" + Bounds, 4, "MCF season and episode must be positive integers"),
         ["Arabic-Indic header version"] = Invalid("WEBVTT MovieContentFilter ١.١.٠\n\n" + Bounds, 1, "MCF header is invalid"),
