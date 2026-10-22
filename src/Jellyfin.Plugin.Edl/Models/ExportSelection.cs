@@ -45,7 +45,7 @@ public abstract record ExportSelection
     /// <summary>The selected path is not a regular file, or its content failed validation.</summary>
     /// <param name="Scope">The file that was selected.</param>
     /// <param name="Diagnostics">Why it is invalid.</param>
-    public sealed record Invalid(ExportScope Scope, IReadOnlyList<EdlValidationDiagnostic> Diagnostics) : ExportSelection
+    public sealed record Invalid(ExportScope Scope, IReadOnlyList<ExportValidationDiagnostic> Diagnostics) : ExportSelection
     {
         /// <inheritdoc />
         public override string Outcome => Scope == ExportScope.Personal ? "personal_invalid" : "default_invalid";

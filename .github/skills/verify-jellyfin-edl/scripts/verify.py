@@ -8,7 +8,7 @@ Usage:
   verify.py run [--inject-failure]   launch, doctor, drive, then always clean up
   verify.py launch                   start an instance and print its evidence dir
   verify.py doctor EVIDENCE_DIR      read-only health check of a launched instance
-  verify.py drive EVIDENCE_DIR       request every synthetic item through the plugin
+  verify.py drive EVIDENCE_DIR       request every synthetic item through both export routes
   verify.py cleanup EVIDENCE_DIR     remove run-owned resources, keep evidence
 
 Exit codes: 0 pass, 1 fail, 2 blocked prerequisite, 64 usage.
@@ -140,8 +140,8 @@ def launch(directory: Path, run: dict) -> None:
     jellyfin_api.add_movie_library(client, "Synthetic", f"/media/{library.LIBRARY_DIR}")
     jellyfin_api.add_movie_library(client, "Restricted", f"/media/{library.RESTRICTED_DIR}")
     jellyfin_api.limit_libraries(client, users["userB"], [jellyfin_api.library_ids(client)["Synthetic"]])
-    restricted = next(c for c in library.edl_cases(manifest) if c["name"] == library.RESTRICTED_CASE)
-    paths = ({library.media_path(case) for case in library.edl_cases(manifest)} | set(library.version_paths())
+    restricted = library.restricted_case(manifest)
+    paths = ({library.media_path(case) for case in library.live_cases(manifest)} | set(library.version_paths())
              | {library.media_path(restricted, library.RESTRICTED_DIR)})
     items = jellyfin_api.wait_for_movies(client, paths, 300)
     reads = [instance.docker("exec", run["container"], "cat", path, check=False, log=log).returncode == 0
@@ -200,7 +200,7 @@ def doctor(directory: Path) -> bool:
 
 
 def drive(directory: Path) -> bool:
-    """Run the two-user journey over GET /Plugins/Edl/ByItem/{id} and record every check in drive.json."""
+    """Run the two-user journey over both export routes and record every check in drive.json."""
     run = evidence.read_json(directory / "run.json")
     manifest = library.load_manifest(FIXTURE)
     state = evidence.read_json(directory / "items.json")
@@ -209,7 +209,7 @@ def drive(directory: Path) -> bool:
                **{name: client_for(run, hidden[f"{name}Token"]) for name in journey.USERS}}
     checks = journey.run(clients, manifest, state["items"], state["users"], state["serverReadsMode000"])
     ok = all(check["ok"] for check in checks)
-    evidence.write_json(directory / "drive.json", {"ok": ok, "route": "GET " + journey.ROUTE.format("{itemId}"),
+    evidence.write_json(directory / "drive.json", {"ok": ok, "routes": {fmt: "GET " + route.format("{itemId}") for fmt, route in journey.ROUTES.items()},
                                                   "users": state["users"],
                                                   "serverReadsMode000": state["serverReadsMode000"], "checks": checks})
     failed = [check["check"] for check in checks if not check["ok"]]

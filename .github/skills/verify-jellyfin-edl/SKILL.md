@@ -1,6 +1,6 @@
 ---
 name: verify-jellyfin-edl
-description: Verify the Jellyfin EDL plugin with its .NET tests and with a disposable real Jellyfin 12.0.0 server driven over authenticated HTTP by two synthetic users. Use after changing the plugin, its EDL route, request authorization, personal or default EDL selection, or the imported Editarr export-layout fixture.
+description: Verify the Jellyfin EDL plugin with its .NET tests and with a disposable real Jellyfin 12.0.0 server driven over authenticated HTTP by two synthetic users. Use after changing the plugin, its EDL or MCF route, request authorization, personal or default EDL or MCF selection, MCF validation, or the imported Editarr export-layout fixture.
 ---
 
 # Verify the Jellyfin EDL plugin
@@ -11,7 +11,7 @@ The helper has two tiers. Report them separately, because neither proves the oth
 | --- | --- | --- | --- |
 | Unit | `verify.py test` | Authorization, version resolution, selection, exact bytes, and validators through the controller with Jellyfin's managers mocked, plus the fixture contract | That Jellyfin loads the plugin, authenticates the request, or applies its real library access rules |
 | Unit, old glibc | `verify.py test --old-glibc` | The same suite on Rocky Linux 8 (glibc 2.28, one release above .NET 10's 2.27 floor) on the host architecture, where glibc exports `__fxstat` but not `fstat` | Other architectures, or any later glibc |
-| Live | `verify.py run` | A real Jellyfin 12.0.0 server loads this build and answers `GET /Plugins/Edl/ByItem/{itemId}` for two signed-in users, a server API key, and no token | Anything the drive does not request |
+| Live | `verify.py run` | A real Jellyfin 12.0.0 server loads this build and answers `GET /Plugins/Edl/ByItem/{itemId}` and `GET /Plugins/Edl/Mcf/ByItem/{itemId}` for two signed-in users, a server API key, and no token | Anything the drive does not request |
 
 Run every command from the repository root. Paths below are relative to it.
 
@@ -45,9 +45,9 @@ The helper names three images in `scripts/instance.py`. Only Jellyfin is pinned 
 5. Creates two labelled volumes and a container that publishes port 8096 on `127.0.0.1` at a random host port. It mounts the scratch media directory read-only and copies the plugin into `/config/plugins/Jellyfin.Plugin.Edl`.
 6. Waits until `/health` answers `Healthy`, records `/System/Info/Public`, completes the startup wizard with a generated administrator password, and signs in.
 7. Creates ordinary users `jfedl-userA` and `jfedl-userB` with generated passwords, signs each in, and creates an API key named `jfedl-verify`.
-8. Writes the library, with every fixture Jellyfin export ID replaced by the live user's ID. `Movies/<case>/` holds each of the 14 EDL selection cases. `Movies/Movie/` holds `Movie - 1080p.mkv` and `Movie - 2160p.mkv` with the version cases' files, which Jellyfin groups into one item with two media sources. `Restricted/edl-each-user-gets-own-file/` repeats a two-user case.
+8. Writes the library, with every fixture Jellyfin export ID replaced by the live user's ID. `Movies/<case>/` holds each of the 19 EDL and MCF selection cases and the plugin-local case `local-mcf-unreadable-personal-does-not-fall-back` from `library.LOCAL_CASES`, a mode 000 personal MCF beside a valid default, because v1 has no unreadable MCF case. `Movies/Movie/` holds `Movie - 1080p.mkv` and `Movie - 2160p.mkv` with the version cases' files, which Jellyfin groups into one item with two media sources. `Restricted/edl-each-user-gets-own-file/` holds the two-user EDL and MCF cases together.
 9. Adds the `Synthetic` (`/media/Movies`) and `Restricted` (`/media/Restricted`) movie libraries with internet metadata and image fetchers disabled, then limits `jfedl-userB` to `Synthetic`.
-10. Waits until all 17 media paths are media sources of indexed movies, then runs `cat` on the mode 000 fixture file inside the container and records whether the server can read it as `serverReadsMode000`.
+10. Waits until all 23 media paths are media sources of indexed movies, then runs `cat` on each mode 000 fixture file inside the container and records whether the server can read them all as `serverReadsMode000`.
 
 Launch prints the evidence directory and the port.
 
@@ -71,16 +71,16 @@ Doctor changes nothing in the instance. It writes `doctor.json` in the evidence 
 python3 .github/skills/verify-jellyfin-edl/scripts/verify.py drive artifacts/verify/<run-id>
 ```
 
-The drive runs `scripts/journey.py`. Every expected result comes from `library.contract_expectation`, the editarr-export-layout-1 rule for the requester. For a user that is the personal file, then the default only when the personal path is absent, never the adjacent legacy file. For the API key it is the default alone, whatever personal files exist. A 200 must be `text/plain` with a body SHA-256 equal to the fixture payload's, which proves exact bytes. Every response except the 401 must carry `Cache-Control: private, no-cache`. The checks are:
+The drive runs `scripts/journey.py`. Every expected result comes from `library.contract_expectation`, the editarr-export-layout-1 rule for the requester and the route's format. For a user that is the personal file, then the default only when the personal path is absent, never the adjacent legacy file. For the API key it is the default alone, whatever personal files exist. A 200 must be `text/plain` from the EDL route or `text/vtt` from the MCF route, with a body SHA-256 equal to the fixture payload's, which proves exact bytes. Every response except the 401 must carry `Cache-Control: private, no-cache`. The checks are:
 
-- no token gives 401;
-- each of the 14 case items as user A, user B, and the API key, with the case's planned outcome recorded for its own principal, plus the API key again with `?userId=` naming the case's user (56 requests). The API key gets the default bytes where a default exists, 404 for `version-1080p-has-personal` and the other cases without one, and 422 for the malformed default;
-- the two-version item is one item, each version by `mediaSourceId` as each user and the API key, and a `mediaSourceId` outside the item gives 404 to a user and to the API key;
-- the restricted item gives 404 to user B, who has a personal file there, user A's personal file to user A, and the default to the API key, which sees every library;
-- user A's own `ETag` gives 304; user B sending user A's `ETag` gets user B's file; user B sending user A's `ETag` for identical default bytes gets 200 and a different `ETag`; user A sending the 2160p `ETag` for 1080p gets the 1080p file;
-- the API key sending user A's `ETag` for identical default bytes gets 200 and an `ETag` unlike either user's; user A sending the API key's `ETag` gets 200; the API key repeating its own `ETag` gets 304, also with `?userId=` naming user A.
+- no token gives 401 on both routes;
+- each of the 20 case items on both routes as user A, user B, and the API key, with the case's planned outcome recorded for its own principal on its own format's route, plus the API key again with `?userId=` naming the case's user (160 requests). The other format's route must ignore the case's files, so `mcf-selected-independently-of-edl` gives user A its personal EDL on the EDL route and the default MCF on the MCF route. The API key gets the default bytes where a default exists, 404 for `version-1080p-has-personal` and the other cases without one, and 422 for the malformed default;
+- the two-version item is one item, each version by `mediaSourceId` on both routes as each user and the API key, and a `mediaSourceId` outside the item gives 404 to a user and to the API key on both routes;
+- the restricted item gives 404 on both routes to user B, who has personal files there, and user A's personal EDL and MCF to user A. The API key, which sees every library, gets the default EDL and a 404 from the MCF route, because that MCF case has no default;
+- for each format, user A's own `ETag` gives 304; user B sending user A's `ETag` gets user B's file; user B sending user A's `ETag` for identical default bytes gets 200 and a different `ETag`; the API key sending user A's `ETag` for identical default bytes gets 200 and an `ETag` unlike either user's; user A sending the API key's `ETag` gets 200; the API key repeating its own `ETag` gets 304, also with `?userId=` naming user A;
+- user A sending the 2160p EDL `ETag` for 1080p gets the 1080p file, and user A sending an EDL `ETag` to the MCF route of the same item gets the MCF with 200.
 
-The mode 000 case expects `personal_unreadable` (500) when `serverReadsMode000` is false and the personal file otherwise. On Docker Desktop for macOS the root server could not read it, probably because the bind mount applies the host user's permissions, so the drive requests a real 500 there.
+The mode 000 cases expect `personal_unreadable` (500) when `serverReadsMode000` is false and the personal file otherwise. On Docker Desktop for macOS the root server could not read them, probably because the bind mount applies the host user's permissions, so the drive requests a real 500 there.
 
 The tokens and API key live only in `secrets.json` (mode 0600) in the run's scratch directory. Do not print them or pass them on a command line. To add a request, extend `journey.run`, which uses `jellyfin_api.Jellyfin`.
 

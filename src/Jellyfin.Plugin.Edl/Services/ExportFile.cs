@@ -20,6 +20,9 @@ internal enum ExportEntry
 /// </summary>
 internal static class ExportFile
 {
+    /// <summary>The largest export file either format accepts, as in Editarr's EDL and MCF parsers.</summary>
+    internal const int MaxContentBytes = 1_048_576;
+
     private const int NoSuchEntry = 2;
     private const int NotADirectory = 20;
     private const int FileTypeMask = 0xF000;

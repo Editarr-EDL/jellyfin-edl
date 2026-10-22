@@ -11,6 +11,7 @@ public sealed class ServiceRegistrator : IPluginServiceRegistrator
     {
         serviceCollection.AddSingleton<IEdlParser, EdlParser>();
         serviceCollection.AddSingleton<EdlExportFormat>();
+        serviceCollection.AddSingleton<McfExportFormat>();
         serviceCollection.AddSingleton<AuthorizedMediaResolver>();
         serviceCollection.AddSingleton<ExportSelector>();
     }

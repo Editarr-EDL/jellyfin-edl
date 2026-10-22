@@ -41,6 +41,14 @@ internal sealed class PluginHarness
 
     public static User NewUser(Guid id) => new("synthetic", "provider", "reset") { Id = id };
 
+    /// <summary>The plugin's format named <paramref name="name"/>, <c>edl</c> or <c>mcf</c>.</summary>
+    public static IExportFormat Format(string name) => name switch
+    {
+        "edl" => new EdlExportFormat(new EdlParser()),
+        "mcf" => new McfExportFormat(),
+        _ => throw new ArgumentOutOfRangeException(nameof(name), name, "unknown format"),
+    };
+
     public static MediaSourceInfo Source(Guid id, string path, MediaProtocol protocol = MediaProtocol.File) =>
         new() { Id = id.ToString("N"), Path = path, Protocol = protocol };
 
@@ -63,8 +71,11 @@ internal sealed class PluginHarness
         return itemId;
     }
 
-    /// <summary>Sends <c>GET /Plugins/Edl/ByItem/{itemId}</c> as <paramref name="user"/>, or as an API key when asked.</summary>
-    public async Task<PluginResponse> GetAsync(User? user, Guid itemId, Guid? mediaSourceId = null, string? ifNoneMatch = null, bool apiKey = false)
+    /// <summary>
+    /// Sends <c>GET /Plugins/Edl/ByItem/{itemId}</c>, or <c>GET /Plugins/Edl/Mcf/ByItem/{itemId}</c> for
+    /// <paramref name="format"/> <c>mcf</c>, as <paramref name="user"/>, or as an API key when asked.
+    /// </summary>
+    public async Task<PluginResponse> GetAsync(User? user, Guid itemId, Guid? mediaSourceId = null, string? ifNoneMatch = null, bool apiKey = false, string format = "edl")
     {
         _authorization.Setup(a => a.GetAuthorizationInfo(It.IsAny<HttpContext>()))
             .ReturnsAsync(new AuthorizationInfo { User = user, IsAuthenticated = true, IsApiKey = apiKey });
@@ -80,12 +91,18 @@ internal sealed class PluginHarness
             _authorization.Object,
             new AuthorizedMediaResolver(_library.Object, _mediaSources.Object),
             new ExportSelector(NullLogger<ExportSelector>.Instance),
-            new EdlExportFormat(new EdlParser()))
+            new EdlExportFormat(new EdlParser()),
+            new McfExportFormat())
         {
             ControllerContext = new ControllerContext { HttpContext = http },
         };
 
-        IActionResult result = await controller.GetByItemId(itemId, mediaSourceId, CancellationToken.None);
+        IActionResult result = format switch
+        {
+            "edl" => await controller.GetByItemId(itemId, mediaSourceId, CancellationToken.None),
+            "mcf" => await controller.GetMcfByItemId(itemId, mediaSourceId, CancellationToken.None),
+            _ => throw new ArgumentOutOfRangeException(nameof(format), format, "unknown format"),
+        };
         await result.ExecuteResultAsync(new ActionContext(http, new RouteData(), new ActionDescriptor()));
         return new PluginResponse(http.Response.StatusCode, http.Response.Headers, ((MemoryStream)http.Response.Body).ToArray());
     }

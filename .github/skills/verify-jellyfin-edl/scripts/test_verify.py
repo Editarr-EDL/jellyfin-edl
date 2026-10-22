@@ -30,22 +30,42 @@ class LibraryTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 library.load_manifest(Path(directory))
 
-    def test_contract_reference_agrees_with_every_edl_case(self):
-        for case in library.edl_cases(self.manifest):
+    def test_contract_reference_agrees_with_every_case_of_both_formats(self):
+        for case in library.live_cases(self.manifest):
             export_id = self.manifest["principals"][case["principal"]]["exportId"]
             expected = library.contract_expectation(case, export_id, self.manifest)
             self.assertEqual(expected["outcome"], case["expect"]["outcome"], case["name"])
             self.assertEqual(expected["payload"], case["expect"].get("payload"), case["name"])
-        self.assertEqual(len(library.edl_cases(self.manifest)), 14)
+            self.assertEqual(expected["format"], case["format"], case["name"])
+        self.assertEqual(len(self.manifest["selection"]), 19)
+        self.assertEqual([c["format"] for c in library.LOCAL_CASES], ["mcf"])
 
-    def test_a_server_that_reads_mode_000_changes_only_the_unreadable_case(self):
-        changed = [case["name"] for case in library.edl_cases(self.manifest)
+    def test_local_case_uses_the_manifest_user_a_export_id(self):
+        user_a = self.manifest["principals"]["userA"]["exportId"]
+        self.assertIn(user_a, library.LOCAL_CASES[0]["entries"][0]["path"])
+
+    def test_the_other_format_ignores_a_cases_files(self):
+        for case in library.live_cases(self.manifest):
+            other = "mcf" if case["format"] == "edl" else "edl"
+            export_id = self.manifest["principals"][case["principal"]]["exportId"]
+            result = library.contract_expectation(case, export_id, self.manifest, fmt=other)
+            if result["payload"] is not None:
+                self.assertEqual(self.manifest["payloads"][result["payload"]]["format"], other, case["name"])
+            elif not any(entry["path"].startswith(other + "/") for entry in case["entries"]):
+                self.assertEqual(result["status"], 404, case["name"])
+        independent = next(c for c in self.manifest["selection"] if c["name"] == "mcf-selected-independently-of-edl")
+        user_a = self.manifest["principals"]["userA"]["exportId"]
+        self.assertEqual(library.contract_expectation(independent, user_a, self.manifest, fmt="edl")["payload"], "edl-personal-a")
+        self.assertEqual(library.contract_expectation(independent, user_a, self.manifest)["payload"], "mcf-default")
+
+    def test_a_server_that_reads_mode_000_changes_only_the_unreadable_cases(self):
+        changed = [case["name"] for case in library.live_cases(self.manifest)
                    if library.contract_expectation(case, self.manifest["principals"][case["principal"]]["exportId"],
                                                    self.manifest, server_reads_mode_000=True)["outcome"] != case["expect"]["outcome"]]
-        self.assertEqual(changed, ["edl-unreadable-personal-does-not-fall-back"])
+        self.assertEqual(changed, ["edl-unreadable-personal-does-not-fall-back", "local-mcf-unreadable-personal-does-not-fall-back"])
 
     def test_a_server_key_expects_only_the_default_whatever_personal_files_exist(self):
-        by_name = {case["name"]: case for case in library.edl_cases(self.manifest)}
+        by_name = {case["name"]: case for case in library.live_cases(self.manifest)}
         expected = {
             "edl-personal-before-default": ("default", "edl-default"),
             "edl-each-user-gets-own-file": ("default", "edl-default"),
@@ -55,6 +75,11 @@ class LibraryTests(unittest.TestCase):
             "version-1080p-has-personal": ("none", None),
             "edl-malformed-default": ("default_invalid", None),
             "edl-legacy-is-never-fallback": ("none", None),
+            "mcf-personal-before-default": ("default", "mcf-default"),
+            "mcf-each-user-gets-own-file": ("none", None),
+            "mcf-malformed-personal-does-not-fall-back": ("default", "mcf-default"),
+            "mcf-legacy-is-never-fallback": ("none", None),
+            "local-mcf-unreadable-personal-does-not-fall-back": ("default", "mcf-default"),
         }
         for name, (outcome, payload) in expected.items():
             result = library.contract_expectation(by_name[name], None, self.manifest)
@@ -72,19 +97,27 @@ class LibraryTests(unittest.TestCase):
             personal = case / "edl" / live_a / f"Movie.user-{live_a}.edl"
             self.assertEqual(stat.S_IMODE(personal.stat().st_mode), 0)
             self.assertEqual((case / "edl" / "Movie.edl").read_bytes(), (FIXTURE / "payloads" / "default.edl").read_bytes())
+            local = root / "media" / library.LIBRARY_DIR / "local-mcf-unreadable-personal-does-not-fall-back"
+            personal_mcf = local / "mcf" / live_a / f"Movie.user-{live_a}.mcf"
+            self.assertEqual(stat.S_IMODE(personal_mcf.stat().st_mode), 0)
+            self.assertEqual((local / "mcf" / "Movie.mcf").read_bytes(), (FIXTURE / "payloads" / "default.mcf").read_bytes())
             self.assertTrue((root / "media" / library.LIBRARY_DIR / "edl-directory-at-personal-path-is-invalid" / "edl"
                              / live_a / f"Movie.user-{live_a}.edl").is_dir())
             self.assertFalse(any("5a4de0c29b1e4f3a8c6d0e1f2a3b4c5d" in path for path in written))
             versions = root / "media" / library.LIBRARY_DIR / "Movie"
             self.assertEqual(sorted(p.name for p in versions.glob("*.mkv")), sorted(library.VERSION_MEDIA))
             self.assertTrue((versions / "edl" / live_a / f"Movie - 1080p.user-{live_a}.edl").is_file())
-            self.assertTrue((root / "media" / library.RESTRICTED_DIR / library.RESTRICTED_CASE / "Movie.mkv").is_file())
-            cases = library.edl_cases(self.manifest)
+            restricted = root / "media" / library.RESTRICTED_DIR / library.RESTRICTED_CASES[0]
+            self.assertTrue((restricted / "Movie.mkv").is_file())
+            self.assertTrue((restricted / "edl" / live_a / f"Movie.user-{live_a}.edl").is_file())
+            self.assertTrue((restricted / "mcf" / live_a / f"Movie.user-{live_a}.mcf").is_file())
+            cases = library.live_cases(self.manifest)
             by_name = {c["name"]: c for c in cases}
-            self.assertEqual(len(written), 14 + sum(len(c["entries"]) for c in cases)
+            self.assertEqual(len(written), 20 + sum(len(c["entries"]) for c in cases)
                              + 2 + len(by_name[library.VERSIONS_CASE]["entries"])
-                             + 1 + len(by_name[library.RESTRICTED_CASE]["entries"]))
+                             + 1 + sum(len(by_name[name]["entries"]) for name in library.RESTRICTED_CASES))
             personal.chmod(0o600)
+            personal_mcf.chmod(0o600)
 
 
 class ReadinessTests(unittest.TestCase):

@@ -19,7 +19,7 @@ Sign in to Jellyfin and call the route with the session's access token in the `A
 
 ## Driving it with verify.py
 
-`verify.py run` launches Jellyfin 12.0.0 with two ordinary users, an API key, the 14 EDL selection cases, one two-version movie, and one movie in a library user B cannot see. The drive in `scripts/journey.py` requests every case as both users and as the API key, with and without `?userId=`, and checks status, exact body hash, `Cache-Control`, and `ETag` behavior against `library.contract_expectation`. `drive.json` records each check.
+`verify.py run` launches Jellyfin 12.0.0 with two ordinary users, an API key, the 19 EDL and MCF selection cases plus one plugin-local MCF case, one two-version movie, and one movie in a library user B cannot see. The drive in `scripts/journey.py` requests every case on the EDL route, and on the MCF route, as both users and as the API key, with and without `?userId=`, and checks status, exact body hash, `Cache-Control`, and `ETag` behavior against `library.contract_expectation`. `drive.json` records each check.
 
 The unit tier covers the same route in `tests/Jellyfin.Plugin.Edl.Tests/EdlControllerTests.cs`, `Contract/SelectionCaseTests.cs`, `Contract/SupplementalSelectionTests.cs`, and `Contract/EdlGrammarVectorTests.cs`. Those tests run the real resolver, selector, and parser with Jellyfin's managers mocked. They do not prove the live route.
 
