@@ -132,12 +132,12 @@ number (0 when the problem has no line).
   the 97 tokens of Editarr's MCF registry, the severity `low`, `medium`, or `high`,
   and the channel `both`, `video`, or `audio`. At most 10,000 payloads.
 
-The plugin differs from Editarr's parser in three places, each measured on a
-shared corpus. It accepts only ASCII digits, where Python's `\d` also matches
-other decimal digits. In `SOURCE` and `IMDB` URLs it skips two `urlsplit` checks:
-the NFKC check of a non-ASCII authority and the check of a bracketed IPv6 or
-IPvFuture host. A URL that only those checks reject is accepted. The plugin
-does not compare cue times with the media's runtime.
+Every number is ASCII digits, as in Editarr's parser. The plugin is looser than
+that parser only in `SOURCE` and `IMDB` URLs, where it skips two `urlsplit`
+checks, measured on a shared corpus. These are the NFKC check of a non-ASCII
+authority and the check of a bracketed IPv6 or IPvFuture host. A URL that only
+those checks reject is accepted. The plugin does not compare cue times with the
+media's runtime.
 
 ## Project Layout
 

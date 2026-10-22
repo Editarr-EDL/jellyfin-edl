@@ -23,7 +23,7 @@ The unit tier covers the route in `tests/Jellyfin.Plugin.Edl.Tests/McfController
 
 ## Gotchas
 
-- The validator follows Editarr's `scanner/formats/mcf_parser.py` without a media duration, so it does not compare cue times with the runtime. It accepts only ASCII digits, where Editarr's Python `\d` accepts any decimal digit, and it skips `urlsplit`'s NFKC and bracketed-host checks on `SOURCE` and `IMDB` URLs. MU-12 measured these as the only differences on a 15,263-document corpus; the corpus and comparison scripts are evidence, not part of the repository.
+- The validator follows Editarr's `scanner/formats/mcf_parser.py` without a media duration, so it does not compare cue times with the runtime. It accepts only ASCII digits, like Editarr since its commit b57d70e, and it skips `urlsplit`'s NFKC and bracketed-host checks on `SOURCE` and `IMDB` URLs. MU-12 measured those URL checks as the only differences, each one a URL the plugin accepts, on a 17,863-document corpus; the corpus and comparison scripts are evidence, not part of the repository.
 - The category list in `Services/McfCategories.cs` is copied from Editarr's `category-registry-v1.json`. `McfValidationTests` pins its SHA-256. A registry change in Editarr needs a matching plugin change.
 - `text/vtt` is the WebVTT media type. Browsers may treat the response as a caption track.
 - Verified on Docker Desktop for macOS on arm64 only.

@@ -9,7 +9,7 @@ namespace Jellyfin.Plugin.Edl.Services;
 /// Validates a MovieContentFilter 1.0.0 or 1.1.0 document by the rules of Editarr's strict parser,
 /// <c>scanner/formats/mcf_parser.py</c> without a media duration, and reports the first problem with that
 /// parser's message and 1-based line number (0 when the problem has no line). The README lists where the
-/// plugin differs: it accepts only ASCII digits, and it skips urlsplit's NFKC and bracketed-host checks.
+/// plugin differs: it skips urlsplit's NFKC and bracketed-host checks.
 /// </summary>
 internal static partial class McfValidator
 {
