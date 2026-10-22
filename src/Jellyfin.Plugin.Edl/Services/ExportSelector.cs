@@ -1,5 +1,6 @@
 using Jellyfin.Plugin.Edl.Models;
 using Microsoft.Extensions.Logging;
+using Microsoft.Win32.SafeHandles;
 
 namespace Jellyfin.Plugin.Edl.Services;
 
@@ -51,34 +52,20 @@ public sealed class ExportSelector
 
     private async Task<ExportSelection> InspectAsync(string path, ExportScope scope, IExportFormat format, CancellationToken cancellationToken)
     {
-        FileAttributes attributes;
-        try
-        {
-            // FileInfo reads the entry itself without following a link. A missing path, or a file
-            // where a directory should be, reads as -1. Any other failure throws.
-            attributes = new FileInfo(path).Attributes;
-        }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
-        {
-            _logger.LogWarning(ex, "Cannot inspect {Scope} {Format} export {Path}", scope, format.Name, path);
-            return new ExportSelection.Unreadable(scope);
-        }
-
-        if ((int)attributes == -1)
-        {
-            return ExportSelection.None.Instance;
-        }
-
-        if ((attributes & (FileAttributes.Directory | FileAttributes.ReparsePoint)) != 0)
-        {
-            return new ExportSelection.Invalid(scope, NotARegularFile);
-        }
-
         byte[] content;
         try
         {
+            (ExportEntry entry, SafeFileHandle? handle) = ExportFile.Open(path);
+            if (handle is null)
+            {
+                return entry == ExportEntry.Absent ? ExportSelection.None.Instance : new ExportSelection.Invalid(scope, NotARegularFile);
+            }
+
+            using var stream = new FileStream(handle, FileAccess.Read, bufferSize: 0);
             BeforeRead?.Invoke(path);
-            content = await File.ReadAllBytesAsync(path, cancellationToken).ConfigureAwait(false);
+            using var buffer = new MemoryStream();
+            await stream.CopyToAsync(buffer, cancellationToken).ConfigureAwait(false);
+            content = buffer.ToArray();
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {

@@ -185,6 +185,10 @@ docker compose down
 
 - Only EDL is served. MCF selection follows the same layout and is not implemented yet.
 - Filesystem path details are logged server-side but not returned in API errors.
-- The plugin checks the entry type before opening it, so a symbolic link swapped in
-  during that window is followed once. A named pipe at an export path is not
-  detected before opening and blocks that request.
+- On Linux x64 and arm64 and on macOS, the plugin opens an export file without following a final
+  symbolic link and without waiting on a named pipe, checks that the open file is a regular file, and
+  reads that same open file. A link, directory, or named pipe at the export path returns 422, even when
+  it is swapped in during a request. An entry the server cannot open returns 500. On Linux this calls
+  the `fstat` symbol, which glibc exports from 2.33 and musl always exports.
+- On Windows and other platforms, the plugin checks the entry and then opens it by path, so a symbolic
+  link swapped in between is followed once. That path is untested.
