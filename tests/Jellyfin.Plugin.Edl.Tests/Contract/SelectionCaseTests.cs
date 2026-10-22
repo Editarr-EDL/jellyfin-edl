@@ -1,4 +1,5 @@
 using System.Runtime.Versioning;
+using Jellyfin.Database.Implementations.Entities;
 using Jellyfin.Plugin.Edl.Models;
 using Jellyfin.Plugin.Edl.Services;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -8,7 +9,8 @@ namespace Jellyfin.Plugin.Edl.Tests.Contract;
 
 /// <summary>
 /// Materializes the 19 MU-01 selection cases and checks every EDL case against its contract
-/// outcome, both from the selector and as the HTTP response. The five MCF cases belong to MU-12.
+/// outcome, both from the selector and as the HTTP response, for the case's user and for a server API key.
+/// The five MCF cases belong to MU-12.
 /// </summary>
 [UnsupportedOSPlatform("windows")]
 public sealed class SelectionCaseTests
@@ -84,7 +86,7 @@ public sealed class SelectionCaseTests
         Guid itemId = Guid.NewGuid();
 
         ExportSelection selection = await new ExportSelector(NullLogger<ExportSelector>.Instance).SelectAsync(
-            new AuthorizedMedia(userId, itemId, itemId, mediaPath), new EdlExportFormat(new EdlParser()), CancellationToken.None);
+            new AuthorizedMedia(new Requester.Account(userId), itemId, itemId, mediaPath), new EdlExportFormat(new EdlParser()), CancellationToken.None);
         var plugin = new PluginHarness();
         var user = PluginHarness.NewUser(userId);
         PluginResponse response = await plugin.GetAsync(user, plugin.AddVideo(new[] { user }, PluginHarness.Source(itemId, mediaPath)));
@@ -98,6 +100,48 @@ public sealed class SelectionCaseTests
         }
 
         _output.WriteLine($"{name}: {selection.Outcome}, HTTP {response.Status}");
+    }
+
+    /// <summary>
+    /// A server API key gets what the case's default path alone decides, whatever personal files the case holds,
+    /// including when the request also names the case's user.
+    /// </summary>
+    [Theory]
+    [MemberData(nameof(EdlCases))]
+    public async Task Edl_case_yields_only_its_default_for_a_server_key(string name)
+    {
+        SelectionCase selectionCase = ExportLayoutFixture.Case(name);
+        using var directory = new TempDirectory();
+        string mediaPath = SelectionCaseMaterializer.Materialize(selectionCase, directory.Path);
+        var plugin = new PluginHarness();
+        Guid itemId = plugin.AddVideo(Array.Empty<User>(), PluginHarness.Source(Guid.NewGuid(), mediaPath));
+        var user = PluginHarness.NewUser(ExportLayoutFixture.UserId(selectionCase.Principal));
+        string defaultPath = $"edl/{Path.GetFileNameWithoutExtension(selectionCase.Media)}.edl";
+        SelectionEntry? entry = selectionCase.Entries.SingleOrDefault(e => e.Path == defaultPath);
+        (string Outcome, string? Payload) expected = entry switch
+        {
+            null => ("none", null),
+            { Directory: true } => ("default_invalid", null),
+            { Unreadable: true } => ("default_unreadable", null),
+            { Payload: { } id } when ExportLayoutFixture.Manifest.Payloads[id].Valid => ("default", id),
+            _ => ("default_invalid", null),
+        };
+
+        ExportSelection selection = await new ExportSelector(NullLogger<ExportSelector>.Instance).SelectAsync(
+            new AuthorizedMedia(Requester.ServerKey.Instance, itemId, itemId, mediaPath), new EdlExportFormat(new EdlParser()), CancellationToken.None);
+        PluginResponse key = await plugin.GetAsync(null, itemId, apiKey: true);
+        PluginResponse keyNamingUser = await plugin.GetAsync(user, itemId, apiKey: true);
+
+        Assert.Equal(expected.Outcome, selection.Outcome);
+        Assert.All(new[] { key, keyNamingUser }, response =>
+        {
+            Assert.Equal(StatusFor(expected.Outcome), response.Status);
+            if (expected.Payload is { } payload)
+            {
+                Assert.Equal(ExportLayoutFixture.PayloadBytes(payload), response.Body);
+            }
+        });
+        _output.WriteLine($"{name} as server key: {selection.Outcome}, HTTP {key.Status}");
     }
 
     private static int StatusFor(string outcome) => outcome switch

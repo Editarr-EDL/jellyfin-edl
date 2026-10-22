@@ -39,7 +39,8 @@ public sealed class ExportLayoutTests
     {
         LayoutPath vector = ExportLayoutFixture.Manifest.Paths[index];
         string exportId = ExportLayoutFixture.Manifest.Principals[vector.Principal].ExportId;
-        Assert.True(ExportLayout.TryGetPaths(vector.Media, exportId, vector.Format, out string personal, out string fallback));
+        string? personal = ExportLayout.PersonalPath(vector.Media, exportId, vector.Format);
+        string? fallback = ExportLayout.DefaultPath(vector.Media, vector.Format);
 
         Assert.Equal(vector.Personal, personal);
         Assert.Equal(vector.Default, fallback);

@@ -10,7 +10,7 @@ using Microsoft.Net.Http.Headers;
 
 namespace Jellyfin.Plugin.Edl.Api;
 
-/// <summary>Serves the signed-in user's personal or default export for a library video.</summary>
+/// <summary>Serves a library video's export: the signed-in user's personal or default file, or the default to a server API key.</summary>
 [ApiController]
 [Authorize]
 [Route("Plugins/Edl")]
@@ -23,7 +23,7 @@ public sealed class EdlController : ControllerBase
 
     /// <summary>Initializes a new instance of the <see cref="EdlController"/> class.</summary>
     /// <param name="authorizationContext">Jellyfin's request authorization context.</param>
-    /// <param name="mediaResolver">Resolves items and versions for the signed-in user.</param>
+    /// <param name="mediaResolver">Resolves items and versions for the requester.</param>
     /// <param name="selector">Selects the personal or default export.</param>
     /// <param name="edl">The EDL format.</param>
     public EdlController(
@@ -38,7 +38,7 @@ public sealed class EdlController : ControllerBase
         _edl = edl;
     }
 
-    /// <summary>Gets the EDL the signed-in user should play for an item.</summary>
+    /// <summary>Gets the EDL the signed-in user should play for an item, or the item's default EDL for a server API key.</summary>
     /// <param name="itemId">The library item.</param>
     /// <param name="mediaSourceId">The item's media source (version); the item's own file when omitted.</param>
     /// <param name="cancellationToken">The cancellation token.</param>
@@ -55,20 +55,29 @@ public sealed class EdlController : ControllerBase
         => ServeAsync(itemId, mediaSourceId, _edl, cancellationToken);
 
     /// <summary>
-    /// Authorizes the user, item, and version, then selects and serves one format's export.
-    /// The user comes only from the request's Jellyfin session. API keys and requests without a user
-    /// get 403 before any library or filesystem lookup. Every format's route goes through here.
+    /// Authorizes the requester, item, and version, then selects and serves one format's export.
+    /// A signed-in user comes only from the request's Jellyfin session. A server API key reads as the
+    /// server even when the request names a user, so it sees every item but only default files.
+    /// Requests with neither get 403 before any library or filesystem lookup. Every format's route goes through here.
     /// </summary>
     private async Task<IActionResult> ServeAsync(Guid itemId, Guid? mediaSourceId, IExportFormat format, CancellationToken cancellationToken)
     {
         Response.Headers.CacheControl = "private, no-cache";
         AuthorizationInfo authorization = await _authorizationContext.GetAuthorizationInfo(HttpContext).ConfigureAwait(false);
-        if (!authorization.IsAuthenticated || authorization.IsApiKey || authorization.User is not { } user || user.Id == Guid.Empty)
+        AuthorizedMedia? media;
+        if (authorization is { IsAuthenticated: true, IsApiKey: true })
+        {
+            media = _mediaResolver.ResolveForServerKey(itemId, mediaSourceId);
+        }
+        else if (authorization is { IsAuthenticated: true, User: { } user } && user.Id != Guid.Empty)
+        {
+            media = _mediaResolver.ResolveForUser(user, itemId, mediaSourceId);
+        }
+        else
         {
             return StatusCode(StatusCodes.Status403Forbidden);
         }
 
-        AuthorizedMedia? media = _mediaResolver.Resolve(user, itemId, mediaSourceId);
         if (media is null)
         {
             return NotFound();
@@ -83,11 +92,11 @@ public sealed class EdlController : ControllerBase
         };
     }
 
-    // The tag covers user, item, version, and format, so a validator from another response never matches.
+    // The tag covers requester, item, version, and format, so a validator from another response never matches.
     private static EntityTagHeaderValue EntityTagFor(AuthorizedMedia media, IExportFormat format, byte[] content)
     {
         using var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
-        hash.AppendData(Encoding.UTF8.GetBytes($"{format.Name}\n{media.UserId:N}\n{media.ItemId:N}\n{media.MediaSourceId:N}\n"));
+        hash.AppendData(Encoding.UTF8.GetBytes($"{format.Name}\n{media.Requester.CacheKey}\n{media.ItemId:N}\n{media.MediaSourceId:N}\n"));
         hash.AppendData(content);
         return new EntityTagHeaderValue($"\"{Convert.ToHexStringLower(hash.GetHashAndReset())}\"");
     }

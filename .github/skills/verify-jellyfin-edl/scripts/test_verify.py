@@ -44,6 +44,22 @@ class LibraryTests(unittest.TestCase):
                                                    self.manifest, server_reads_mode_000=True)["outcome"] != case["expect"]["outcome"]]
         self.assertEqual(changed, ["edl-unreadable-personal-does-not-fall-back"])
 
+    def test_a_server_key_expects_only_the_default_whatever_personal_files_exist(self):
+        by_name = {case["name"]: case for case in library.edl_cases(self.manifest)}
+        expected = {
+            "edl-personal-before-default": ("default", "edl-default"),
+            "edl-each-user-gets-own-file": ("default", "edl-default"),
+            "edl-malformed-personal-does-not-fall-back": ("default", "edl-default"),
+            "edl-unreadable-personal-does-not-fall-back": ("default", "edl-default"),
+            "edl-directory-at-personal-path-is-invalid": ("default", "edl-default"),
+            "version-1080p-has-personal": ("none", None),
+            "edl-malformed-default": ("default_invalid", None),
+            "edl-legacy-is-never-fallback": ("none", None),
+        }
+        for name, (outcome, payload) in expected.items():
+            result = library.contract_expectation(by_name[name], None, self.manifest)
+            self.assertEqual((result["outcome"], result["payload"]), (outcome, payload), name)
+
     def test_build_writes_exact_payload_bytes_and_modes_under_live_user_ids(self):
         live_a = "a" * 32
         export_ids = {self.manifest["principals"]["userA"]["exportId"]: live_a}

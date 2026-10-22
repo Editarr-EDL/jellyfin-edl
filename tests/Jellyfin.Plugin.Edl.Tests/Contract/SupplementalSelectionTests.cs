@@ -7,8 +7,9 @@ namespace Jellyfin.Plugin.Edl.Tests.Contract;
 
 /// <summary>
 /// Selection rules of editarr-export-layout-1 that the frozen v1 manifest has no case for: symbolic links,
-/// an unsearchable personal directory, an unreadable default, and refused media names. Each case pairs
-/// the selector outcome with the HTTP status. These cases are local to the plugin and do not change v1.
+/// linked export folders, an unsearchable personal directory, an unreadable default, refused media names,
+/// and a server API key. Each case pairs the selector outcome with the HTTP status. These cases are local
+/// to the plugin and do not change v1.
 /// </summary>
 [UnsupportedOSPlatform("windows")]
 public sealed class SupplementalSelectionTests : IDisposable
@@ -61,12 +62,40 @@ public sealed class SupplementalSelectionTests : IDisposable
     }
 
     [Fact]
+    public async Task Linked_export_folders_are_allowed_because_only_the_final_file_is_checked()
+    {
+        Write("elsewhere/edl/Movie.edl", "edl-default");
+        Write($"elsewhere/personal/Movie.user-{UserId:N}.edl", "edl-personal-a");
+        Link("edl", "elsewhere/edl");
+        Link(PersonalDirectory, "elsewhere/personal");
+
+        await AssertOutcomeAsync("Movie.mkv", "personal", 200);
+        await AssertOutcomeAsync("Movie.mkv", "default", 200, serverKey: true);
+    }
+
+    [Fact]
     public async Task Symlink_at_the_default_path_is_invalid_when_the_personal_file_is_absent()
     {
         Write("elsewhere/default.edl", "edl-default");
         Link(Default, "elsewhere/default.edl");
 
         await AssertOutcomeAsync("Movie.mkv", "default_invalid", 422);
+        await AssertOutcomeAsync("Movie.mkv", "default_invalid", 422, serverKey: true);
+    }
+
+    [Fact]
+    public async Task Server_key_gets_the_default_whatever_blocks_the_personal_path()
+    {
+        Write("elsewhere/personal.edl", "edl-personal-a");
+        Write(Default, "edl-default");
+        Link(Personal, "elsewhere/personal.edl");
+        await AssertOutcomeAsync("Movie.mkv", "personal_invalid", 422);
+        await AssertOutcomeAsync("Movie.mkv", "default", 200, serverKey: true);
+
+        File.Delete(Path.Combine(_directory.Path, Personal));
+        File.SetUnixFileMode(Path.Combine(_directory.Path, PersonalDirectory), UnixFileMode.None);
+        await AssertOutcomeAsync("Movie.mkv", "personal_unreadable", 500);
+        await AssertOutcomeAsync("Movie.mkv", "default", 200, serverKey: true);
     }
 
     [Fact]
@@ -86,6 +115,7 @@ public sealed class SupplementalSelectionTests : IDisposable
         File.SetUnixFileMode(Path.Combine(_directory.Path, Default), UnixFileMode.None);
 
         await AssertOutcomeAsync("Movie.mkv", "default_unreadable", 500);
+        await AssertOutcomeAsync("Movie.mkv", "default_unreadable", 500, serverKey: true);
     }
 
     [Theory]
@@ -101,17 +131,19 @@ public sealed class SupplementalSelectionTests : IDisposable
         await AssertOutcomeAsync(media, "none", 404);
     }
 
-    private async Task AssertOutcomeAsync(string media, string outcome, int status)
+    private async Task AssertOutcomeAsync(string media, string outcome, int status, bool serverKey = false)
     {
         string mediaPath = Path.Combine(_directory.Path, media);
         File.WriteAllBytes(mediaPath, Array.Empty<byte>());
         Guid itemId = Guid.NewGuid();
+        Requester requester = serverKey ? Requester.ServerKey.Instance : new Requester.Account(UserId);
 
         ExportSelection selection = await new ExportSelector(NullLogger<ExportSelector>.Instance).SelectAsync(
-            new AuthorizedMedia(UserId, itemId, itemId, mediaPath), new EdlExportFormat(new EdlParser()), CancellationToken.None);
+            new AuthorizedMedia(requester, itemId, itemId, mediaPath), new EdlExportFormat(new EdlParser()), CancellationToken.None);
         var plugin = new PluginHarness();
         var user = PluginHarness.NewUser(UserId);
-        PluginResponse response = await plugin.GetAsync(user, plugin.AddVideo(new[] { user }, PluginHarness.Source(itemId, mediaPath)));
+        Guid item = plugin.AddVideo(new[] { user }, PluginHarness.Source(itemId, mediaPath));
+        PluginResponse response = serverKey ? await plugin.GetAsync(null, item, apiKey: true) : await plugin.GetAsync(user, item);
 
         Assert.Equal(outcome, selection.Outcome);
         Assert.Equal(status, response.Status);

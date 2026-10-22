@@ -1,17 +1,20 @@
 # jellyfin-edl
 
 Jellyfin plugin that serves each signed-in user's EDL for a video, or the item's
-default EDL when that user has none.
+default EDL when that user has none. A server API key gets only the default EDL.
 
 ## What It Does
 
 Given a Jellyfin library item ID and optional media source ID, the plugin:
 
-1. Takes the user from the request's Jellyfin session. API keys and requests
-   without a user are refused before any lookup.
-2. Resolves the item through Jellyfin's access rules for that user, then the
-   requested version among the item's media sources.
-3. Reads that version's personal EDL. Only when it is absent, reads the default.
+1. Takes the user from the request's Jellyfin session, or treats a server API key
+   as the server, even when the request names a user. Requests with neither are
+   refused before any lookup.
+2. Resolves the item through Jellyfin's access rules for that user, or across
+   every library for an API key, then the requested version among the item's
+   media sources.
+3. For a user, reads that version's personal EDL and, only when it is absent,
+   the default. For an API key, reads only the default.
 4. Validates the file and returns its exact bytes.
 
 For `/media/Movies/Movie/Movie.mkv` and a user whose Jellyfin ID is `<id>`
@@ -24,7 +27,12 @@ For `/media/Movies/Movie/Movie.mkv` and a user whose Jellyfin ID is `<id>`
 | Legacy, never read | `/media/Movies/Movie/Movie.edl` |
 
 An invalid or unreadable personal file is reported and never replaced by the
-default. A symbolic link or directory at either path counts as invalid.
+default. A symbolic link or directory at either file path counts as invalid.
+Only the final file is checked: `edl/` and `edl/<id>/` may be symbolic links to
+folders elsewhere.
+
+An API key's response depends only on the default file. It never reads a personal
+file, so it neither returns personal bytes nor reveals whether personal files exist.
 
 Upgrading from a release that served adjacent `Movie.edl` files: those files
 stay on disk but are no longer served. Move them to `edl/Movie.edl`, or export
@@ -34,16 +42,19 @@ again from Editarr, to make them available.
 
 - Route: `GET /Plugins/Edl/ByItem/{itemId}?mediaSourceId={versionId}`.
   `mediaSourceId` is optional and defaults to the item's own file. It must be one
-  of the item's media sources for the signed-in user.
-- Auth: a signed-in user's access token. The user always comes from the token;
-  the route takes no user parameter.
+  of the item's media sources visible to the requester.
+- Auth: a signed-in user's access token, or a server API key. The user always
+  comes from the token; the route takes no user parameter, and `userId` in the
+  query is ignored.
 - `200 OK`: `text/plain; charset=utf-8`, the file's exact bytes, and an `ETag`
-  that differs for each user, item, version, and format.
-- `304 Not Modified`: `If-None-Match` matches that same response's `ETag`.
+  that differs for each user or API key, item, version, and format.
+- `304 Not Modified`: `If-None-Match` matches that same response's `ETag`. A
+  user's `ETag` never matches an API key's response, or the reverse.
 - `401 Unauthorized`: no token.
-- `403 Forbidden`: an API key, with or without a user named anywhere in the request.
-- `404 Not Found`: no item, version, or local file visible to the user, or no
-  personal or default file.
+- `403 Forbidden`: an authenticated request with neither a user nor an API key.
+- `404 Not Found`: no item, version, or local file visible to the requester, or no
+  personal or default file. For an API key, no default file, whatever personal
+  files exist.
 - `422 Unprocessable Entity`: the selected file is invalid, with JSON diagnostics.
 - `500 Internal Server Error`: the selected file exists but cannot be read.
 - Every response except Jellyfin's own 401 carries `Cache-Control: private, no-cache`.
@@ -130,7 +141,7 @@ Create local media fixtures for fast API-path checks:
 
 The fixture script creates `dev/media` with valid/missing/invalid default EDL scenarios and a short setup guide.
 
-Run authenticated endpoint checks with a real item ID. The token must be a signed-in user's access token, for example `AccessToken` from `POST /Users/AuthenticateByName`. An API key gets 403.
+Run authenticated endpoint checks with a real item ID. Use a signed-in user's access token, for example `AccessToken` from `POST /Users/AuthenticateByName`, to check personal files. An API key gets only the default file.
 
 ```bash
 JELLYFIN_USER_TOKEN="<user_access_token>" \

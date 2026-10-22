@@ -10,7 +10,7 @@ The helper has two tiers. Report them separately, because neither proves the oth
 | Tier | Command | Proves | Does not prove |
 | --- | --- | --- | --- |
 | Unit | `verify.py test` | Authorization, version resolution, selection, exact bytes, and validators through the controller with Jellyfin's managers mocked, plus the fixture contract | That Jellyfin loads the plugin, authenticates the request, or applies its real library access rules |
-| Live | `verify.py run` | A real Jellyfin 12.0.0 server loads this build and answers `GET /Plugins/Edl/ByItem/{itemId}` for two signed-in users, an API key, and no token | Anything the drive does not request |
+| Live | `verify.py run` | A real Jellyfin 12.0.0 server loads this build and answers `GET /Plugins/Edl/ByItem/{itemId}` for two signed-in users, a server API key, and no token | Anything the drive does not request |
 
 Run every command from the repository root. Paths below are relative to it.
 
@@ -69,13 +69,14 @@ Doctor changes nothing in the instance. It writes `doctor.json` in the evidence 
 python3 .github/skills/verify-jellyfin-edl/scripts/verify.py drive artifacts/verify/<run-id>
 ```
 
-The drive runs `scripts/journey.py`. Every expected result comes from `library.contract_expectation`, the editarr-export-layout-1 rule for the requesting user: the personal file, then the default only when the personal path is absent, never the adjacent legacy file. A 200 must be `text/plain` with a body SHA-256 equal to the fixture payload's, which proves exact bytes. Every response except the 401 must carry `Cache-Control: private, no-cache`. The checks are:
+The drive runs `scripts/journey.py`. Every expected result comes from `library.contract_expectation`, the editarr-export-layout-1 rule for the requester. For a user that is the personal file, then the default only when the personal path is absent, never the adjacent legacy file. For the API key it is the default alone, whatever personal files exist. A 200 must be `text/plain` with a body SHA-256 equal to the fixture payload's, which proves exact bytes. Every response except the 401 must carry `Cache-Control: private, no-cache`. The checks are:
 
-- no token gives 401; the API key gives 403, also with `?userId=` naming user A;
-- each of the 14 case items as user A and as user B (28 requests), with the case's planned outcome recorded for its own principal;
-- the two-version item is one item, each version by `mediaSourceId` as each user, and a `mediaSourceId` outside the item gives 404;
-- the restricted item gives 404 to user B, who has a personal file there, and user A's personal file to user A;
-- user A's own `ETag` gives 304; user B sending user A's `ETag` gets user B's file; user B sending user A's `ETag` for identical default bytes gets 200 and a different `ETag`; user A sending the 2160p `ETag` for 1080p gets the 1080p file.
+- no token gives 401;
+- each of the 14 case items as user A, user B, and the API key, with the case's planned outcome recorded for its own principal, plus the API key again with `?userId=` naming the case's user (56 requests). The API key gets the default bytes where a default exists, 404 for `version-1080p-has-personal` and the other cases without one, and 422 for the malformed default;
+- the two-version item is one item, each version by `mediaSourceId` as each user and the API key, and a `mediaSourceId` outside the item gives 404 to a user and to the API key;
+- the restricted item gives 404 to user B, who has a personal file there, user A's personal file to user A, and the default to the API key, which sees every library;
+- user A's own `ETag` gives 304; user B sending user A's `ETag` gets user B's file; user B sending user A's `ETag` for identical default bytes gets 200 and a different `ETag`; user A sending the 2160p `ETag` for 1080p gets the 1080p file;
+- the API key sending user A's `ETag` for identical default bytes gets 200 and an `ETag` unlike either user's; user A sending the API key's `ETag` gets 200; the API key repeating its own `ETag` gets 304, also with `?userId=` naming user A.
 
 The mode 000 case expects `personal_unreadable` (500) when `serverReadsMode000` is false and the personal file otherwise. On Docker Desktop for macOS the root server could not read it, probably because the bind mount applies the host user's permissions, so the drive requests a real 500 there.
 
@@ -117,7 +118,7 @@ Cleanup succeeds only when redaction completed and every resource is gone. Any o
 - `scripts/journey.py` is the two-user drive.
 - `scripts/evidence.py` writes evidence and redacts secrets.
 
-The repository's `scripts/` directory remains the manual harness. It needs a signed-in user's token in `JELLYFIN_USER_TOKEN`, because API keys get 403. It writes build output into the checkout, targets the unpublished `jellyfin/jellyfin:12.0.0` Compose service, and passes the token on the `curl` command line.
+The repository's `scripts/` directory remains the manual harness. It needs a signed-in user's token in `JELLYFIN_USER_TOKEN` to reach personal files, because an API key reads only defaults. It writes build output into the checkout, targets the unpublished `jellyfin/jellyfin:12.0.0` Compose service, and passes the token on the `curl` command line.
 
 Test the helper itself without writing bytecode into the checkout.
 

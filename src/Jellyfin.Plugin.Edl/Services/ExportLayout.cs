@@ -31,25 +31,25 @@ public static class ExportLayout
         return dot == 0 || dot == fileName.Length - 1 ? null : fileName[..dot];
     }
 
-    /// <summary>Computes the personal and default paths for one media file, user, and format.</summary>
+    /// <summary>Computes a user's personal export path for one media file and format.</summary>
     /// <param name="mediaPath">The rooted media path.</param>
     /// <param name="exportId">The user's export ID.</param>
     /// <param name="format">The format name.</param>
-    /// <param name="personal">The personal export path.</param>
-    /// <param name="fallback">The default export path.</param>
-    /// <returns>False when the media name has no supported stem.</returns>
-    public static bool TryGetPaths(string mediaPath, string exportId, string format, out string personal, out string fallback)
+    /// <returns>The path, or null when the media name has no supported stem.</returns>
+    public static string? PersonalPath(string mediaPath, string exportId, string format) =>
+        Split(mediaPath) is { } media ? Path.Combine(media.Directory, format, exportId, $"{media.Stem}.user-{exportId}.{format}") : null;
+
+    /// <summary>Computes the default export path for one media file and format.</summary>
+    /// <param name="mediaPath">The rooted media path.</param>
+    /// <param name="format">The format name.</param>
+    /// <returns>The path, or null when the media name has no supported stem.</returns>
+    public static string? DefaultPath(string mediaPath, string format) =>
+        Split(mediaPath) is { } media ? Path.Combine(media.Directory, format, $"{media.Stem}.{format}") : null;
+
+    private static (string Directory, string Stem)? Split(string mediaPath)
     {
         string? directory = Path.GetDirectoryName(mediaPath);
         string? stem = MediaStem(Path.GetFileName(mediaPath));
-        if (directory is null || stem is null)
-        {
-            personal = fallback = string.Empty;
-            return false;
-        }
-
-        personal = Path.Combine(directory, format, exportId, $"{stem}.user-{exportId}.{format}");
-        fallback = Path.Combine(directory, format, $"{stem}.{format}");
-        return true;
+        return directory is null || stem is null ? null : (directory, stem);
     }
 }

@@ -4,9 +4,10 @@ using Microsoft.Extensions.Logging;
 namespace Jellyfin.Plugin.Edl.Services;
 
 /// <summary>
-/// Selects the export file a user receives for one authorized media version and format.
-/// The personal file wins. The default is consulted only when the personal path is absent,
-/// so an invalid or unreadable personal file is reported instead of falling back.
+/// Selects the export file a requester receives for one authorized media version and format.
+/// A user's personal file wins. The default is consulted only when the personal path is absent,
+/// so an invalid or unreadable personal file is reported instead of falling back. A server API key
+/// never has a personal path inspected, so its response is the same whatever personal files exist.
 /// </summary>
 public sealed class ExportSelector
 {
@@ -23,19 +24,20 @@ public sealed class ExportSelector
     }
 
     /// <summary>Selects and reads the export for <paramref name="media"/> in <paramref name="format"/>.</summary>
-    /// <param name="media">The version the user is authorized to play.</param>
+    /// <param name="media">The version the requester is authorized to read exports for.</param>
     /// <param name="format">The export format.</param>
     /// <param name="cancellationToken">The cancellation token.</param>
     /// <returns>The selection, carrying the exact file bytes when one was found.</returns>
     public async Task<ExportSelection> SelectAsync(AuthorizedMedia media, IExportFormat format, CancellationToken cancellationToken)
     {
-        if (!ExportLayout.TryGetPaths(media.MediaPath, ExportLayout.ExportId(media.UserId), format.Name, out string personal, out string fallback))
+        ExportSelection selection = ExportSelection.None.Instance;
+        if (media.Requester is Requester.Account account
+            && ExportLayout.PersonalPath(media.MediaPath, ExportLayout.ExportId(account.UserId), format.Name) is { } personal)
         {
-            return ExportSelection.None.Instance;
+            selection = await InspectAsync(personal, ExportScope.Personal, format, cancellationToken).ConfigureAwait(false);
         }
 
-        ExportSelection selection = await InspectAsync(personal, ExportScope.Personal, format, cancellationToken).ConfigureAwait(false);
-        if (selection is ExportSelection.None)
+        if (selection is ExportSelection.None && ExportLayout.DefaultPath(media.MediaPath, format.Name) is { } fallback)
         {
             selection = await InspectAsync(fallback, ExportScope.Default, format, cancellationToken).ConfigureAwait(false);
         }

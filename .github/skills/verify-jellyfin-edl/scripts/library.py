@@ -39,16 +39,20 @@ def localize(case: dict, export_ids: dict) -> dict:
     return dict(case, entries=[dict(entry, path=rename(entry["path"])) for entry in case["entries"]])
 
 
-def contract_expectation(case: dict, export_id: str, manifest: dict, server_reads_mode_000: bool = False) -> dict:
+def contract_expectation(case: dict, export_id: str | None, manifest: dict, server_reads_mode_000: bool = False) -> dict:
     """What editarr-export-layout-1 selects for one user: personal, then default only when personal is absent.
 
-    Whether a mode 000 file is unreadable depends on the server's user and
-    filesystem, so with server_reads_mode_000 an unreadable entry is selected
-    like a readable one.
+    export_id None is a server API key, which gets only the default whatever
+    personal files exist. Whether a mode 000 file is unreadable depends on the
+    server's user and filesystem, so with server_reads_mode_000 an unreadable
+    entry is selected like a readable one.
     """
     stem = os.path.splitext(case["media"])[0]
     entries = {entry["path"]: entry for entry in case["entries"]}
-    for scope, path in (("personal", f"edl/{export_id}/{stem}.user-{export_id}.edl"), ("default", f"edl/{stem}.edl")):
+    candidates = [("default", f"edl/{stem}.edl")]
+    if export_id is not None:
+        candidates.insert(0, ("personal", f"edl/{export_id}/{stem}.user-{export_id}.edl"))
+    for scope, path in candidates:
         entry = entries.get(path)
         if entry is None:
             continue

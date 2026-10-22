@@ -1,16 +1,16 @@
 # EDL by item
 
-A Jellyfin client asks the plugin for the EDL the signed-in user should play with a library video. The plugin takes the user from the session, resolves the item and version through Jellyfin's access rules for that user, then serves the user's personal EDL, or the item's default EDL when the user has none.
+A Jellyfin client asks the plugin for the EDL the signed-in user should play with a library video. The plugin takes the user from the session, resolves the item and version through Jellyfin's access rules for that user, then serves the user's personal EDL, or the item's default EDL when the user has none. A server API key, such as a server-side tool's, gets only the item's default EDL.
 
 ## Sub-features
 
 - `GET /Plugins/Edl/ByItem/{itemId}` serves the item's own file. `?mediaSourceId={id}` selects another of the item's media sources (versions).
 - For `Movie.mkv` and user `<id>` (32 lowercase hex digits), `edl/<id>/Movie.user-<id>.edl` wins. `edl/Movie.edl` is read only when that personal path is absent. The adjacent `Movie.edl` is never read.
-- A valid file returns 200 `text/plain; charset=utf-8` with the file's exact bytes and an `ETag` that differs per user, item, version, and format. `If-None-Match` with that same `ETag` returns 304.
-- An invalid selected file, or a directory or symbolic link at its path, returns 422 with a JSON `Diagnostics` array of `LineNumber` and `Message`. An invalid personal file never falls back to the default.
+- A valid file returns 200 `text/plain; charset=utf-8` with the file's exact bytes and an `ETag` that differs per user or API key, item, version, and format. `If-None-Match` with that same `ETag` returns 304.
+- An invalid selected file, or a directory or symbolic link at its path, returns 422 with a JSON `Diagnostics` array of `LineNumber` and `Message`. An invalid personal file never falls back to the default. Only the final file is checked for links. Decided 2026-10-21: `edl/` and `edl/<id>/` may be symbolic links to folders.
 - A selected file that exists but cannot be inspected or read returns 500 and never falls back.
-- A request without a token returns 401. An API key returns 403, even with a `userId` query parameter. The route takes no user parameter.
-- An item or version the user cannot see, a version without a local file, or no personal or default file returns 404.
+- A request without a token returns 401. A server API key sees every library and reads only the default file. It gets the default's bytes, 422 or 500 for an invalid or unreadable default, and 404 when there is no default, whatever personal files exist. A `userId` query parameter changes nothing. The route takes no user parameter. An authenticated request with neither a user nor an API key returns 403.
+- An item or version the requester cannot see, a version without a local file, or no eligible file returns 404.
 - Every response from the plugin carries `Cache-Control: private, no-cache`.
 
 ## How to get to it (user POV)
@@ -19,7 +19,7 @@ Sign in to Jellyfin and call the route with the session's access token in the `A
 
 ## Driving it with verify.py
 
-`verify.py run` launches Jellyfin 12.0.0 with two ordinary users, an API key, the 14 EDL selection cases, one two-version movie, and one movie in a library user B cannot see. The drive in `scripts/journey.py` requests every case as both users and checks status, exact body hash, `Cache-Control`, and `ETag` behavior against `library.contract_expectation`. `drive.json` records each check.
+`verify.py run` launches Jellyfin 12.0.0 with two ordinary users, an API key, the 14 EDL selection cases, one two-version movie, and one movie in a library user B cannot see. The drive in `scripts/journey.py` requests every case as both users and as the API key, with and without `?userId=`, and checks status, exact body hash, `Cache-Control`, and `ETag` behavior against `library.contract_expectation`. `drive.json` records each check.
 
 The unit tier covers the same route in `tests/Jellyfin.Plugin.Edl.Tests/EdlControllerTests.cs`, `Contract/SelectionCaseTests.cs`, `Contract/SupplementalSelectionTests.cs`, and `Contract/EdlGrammarVectorTests.cs`. Those tests run the real resolver, selector, and parser with Jellyfin's managers mocked. They do not prove the live route.
 

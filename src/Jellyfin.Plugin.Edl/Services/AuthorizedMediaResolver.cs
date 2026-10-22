@@ -8,7 +8,8 @@ using MediaBrowser.Model.MediaInfo;
 namespace Jellyfin.Plugin.Edl.Services;
 
 /// <summary>
-/// Resolves a requested item and version to a local media path through Jellyfin's own access rules for one user.
+/// Resolves a requested item and version to a local media path through Jellyfin's own access rules for one user,
+/// or across the whole library for a server API key.
 /// </summary>
 public sealed class AuthorizedMediaResolver
 {
@@ -32,9 +33,22 @@ public sealed class AuthorizedMediaResolver
     /// <param name="itemId">The requested item.</param>
     /// <param name="mediaSourceId">The requested version, or null for the item's own file.</param>
     /// <returns>The authorized media, or null.</returns>
-    public AuthorizedMedia? Resolve(User user, Guid itemId, Guid? mediaSourceId)
+    public AuthorizedMedia? ResolveForUser(User user, Guid itemId, Guid? mediaSourceId) =>
+        Resolve(new Requester.Account(user.Id), _libraryManager.GetItemById<Video>(itemId, user), user, itemId, mediaSourceId);
+
+    /// <summary>
+    /// Returns the version for a server API key, which sees every library item, or null when the item
+    /// is not a video, the version is not one of its media sources, or the version has no local file.
+    /// </summary>
+    /// <param name="itemId">The requested item.</param>
+    /// <param name="mediaSourceId">The requested version, or null for the item's own file.</param>
+    /// <returns>The authorized media, or null.</returns>
+    public AuthorizedMedia? ResolveForServerKey(Guid itemId, Guid? mediaSourceId) =>
+        Resolve(Requester.ServerKey.Instance, _libraryManager.GetItemById<Video>(itemId), null, itemId, mediaSourceId);
+
+    private AuthorizedMedia? Resolve(Requester requester, Video? video, User? user, Guid itemId, Guid? mediaSourceId)
     {
-        if (_libraryManager.GetItemById<Video>(itemId, user) is not Video video)
+        if (video is null)
         {
             return null;
         }
@@ -47,6 +61,6 @@ public sealed class AuthorizedMediaResolver
             return null;
         }
 
-        return new AuthorizedMedia(user.Id, itemId, versionId, source.Path);
+        return new AuthorizedMedia(requester, itemId, versionId, source.Path);
     }
 }

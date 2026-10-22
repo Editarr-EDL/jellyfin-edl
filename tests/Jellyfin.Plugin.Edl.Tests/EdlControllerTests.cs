@@ -63,23 +63,101 @@ public sealed class EdlControllerTests : IDisposable
     }
 
     [Fact]
-    public async Task Api_key_gets_403_before_any_lookup_even_when_it_carries_a_user()
+    public async Task Request_without_a_user_or_key_gets_403_before_any_lookup()
+    {
+        Guid item = AddMovie(new[] { _userA });
+        Write("edl/Movie.edl", DefaultEdl);
+        int lookupsBefore = _plugin.LibraryLookups;
+
+        PluginResponse noUser = await _plugin.GetAsync(null, item);
+
+        Assert.Equal(403, noUser.Status);
+        Assert.Empty(noUser.Body);
+        Assert.Equal(lookupsBefore, _plugin.LibraryLookups);
+    }
+
+    [Fact]
+    public void Route_binds_no_user_parameter()
+    {
+        Assert.Equal(
+            new[] { "itemId", "mediaSourceId", "cancellationToken" },
+            typeof(EdlController).GetMethod(nameof(EdlController.GetByItemId))!.GetParameters().Select(p => p.Name));
+    }
+
+    [Fact]
+    public async Task Api_key_reads_the_default_and_never_a_personal_file_even_when_it_names_a_user()
     {
         Guid item = AddMovie(new[] { _userA });
         Write(Personal(_userA), EdlA);
         Write("edl/Movie.edl", DefaultEdl);
-        int lookupsBefore = _plugin.LibraryLookups;
 
-        PluginResponse keyOnly = await _plugin.GetAsync(null, item, apiKey: true);
-        PluginResponse impersonation = await _plugin.GetAsync(_userA, item, apiKey: true);
-        PluginResponse noUser = await _plugin.GetAsync(null, item);
+        AssertServed(EdlA, await _plugin.GetAsync(_userA, item));
+        AssertServed(DefaultEdl, await _plugin.GetAsync(null, item, apiKey: true));
+        AssertServed(DefaultEdl, await _plugin.GetAsync(_userA, item, apiKey: true));
+    }
 
-        Assert.All(new[] { keyOnly, impersonation, noUser }, response =>
+    [Fact]
+    public async Task Api_key_gets_404_when_only_personal_files_exist()
+    {
+        Guid item = AddMovie(new[] { _userA, _userB });
+        Write(Personal(_userA), EdlA);
+        Write(Personal(_userB), EdlB);
+
+        AssertServed(EdlA, await _plugin.GetAsync(_userA, item));
+        PluginResponse key = await _plugin.GetAsync(null, item, apiKey: true);
+        PluginResponse keyNamingUser = await _plugin.GetAsync(_userA, item, apiKey: true);
+
+        Assert.All(new[] { key, keyNamingUser }, response =>
         {
-            Assert.Equal(403, response.Status);
+            Assert.Equal(404, response.Status);
             Assert.Empty(response.Body);
+            Assert.Empty(response.ETag);
         });
-        Assert.Equal(lookupsBefore, _plugin.LibraryLookups);
+    }
+
+    [Fact]
+    public async Task Api_key_response_does_not_change_with_invalid_or_unreadable_personal_files()
+    {
+        Guid item = AddMovie(new[] { _userA, _userB });
+        Write("edl/Movie.edl", DefaultEdl);
+        PluginResponse before = await _plugin.GetAsync(null, item, apiKey: true);
+
+        Write(Personal(_userA), Encoding.UTF8.GetBytes("not an edl\n"));
+        Directory.CreateDirectory(Path.Combine(_directory.Path, Personal(_userB)));
+        Assert.Equal(422, (await _plugin.GetAsync(_userA, item)).Status);
+        Assert.Equal(422, (await _plugin.GetAsync(_userB, item)).Status);
+
+        PluginResponse after = await _plugin.GetAsync(null, item, apiKey: true);
+        AssertServed(DefaultEdl, before);
+        AssertServed(DefaultEdl, after);
+        Assert.Equal(before.ETag, after.ETag);
+    }
+
+    [Fact]
+    public async Task Api_key_gets_422_for_a_malformed_default_even_beside_a_valid_personal_file()
+    {
+        Guid item = AddMovie(new[] { _userA });
+        Write(Personal(_userA), EdlA);
+        Write("edl/Movie.edl", Encoding.UTF8.GetBytes("0 1 9\n"));
+
+        AssertServed(EdlA, await _plugin.GetAsync(_userA, item));
+        Assert.Equal(422, (await _plugin.GetAsync(null, item, apiKey: true)).Status);
+    }
+
+    [Fact]
+    public async Task Api_key_sees_items_in_every_library_and_resolves_versions()
+    {
+        Guid hd = Guid.NewGuid();
+        Guid uhd = Guid.NewGuid();
+        _plugin.AddVideo(Array.Empty<User>(), Source(hd, "Movie - 1080p.mkv"), Source(uhd, "Movie - 2160p.mkv"));
+        Write(Personal(_userA, "Movie - 1080p"), EdlA);
+        Write("edl/Movie - 2160p.edl", DefaultEdl);
+
+        Assert.Equal(404, (await _plugin.GetAsync(_userA, hd)).Status);
+        Assert.Equal(404, (await _plugin.GetAsync(null, hd, apiKey: true)).Status);
+        AssertServed(DefaultEdl, await _plugin.GetAsync(null, hd, uhd, apiKey: true));
+        Assert.Equal(404, (await _plugin.GetAsync(null, hd, Guid.NewGuid(), apiKey: true)).Status);
+        Assert.Equal(404, (await _plugin.GetAsync(null, Guid.NewGuid(), apiKey: true)).Status);
     }
 
     [Fact]
@@ -160,6 +238,24 @@ public sealed class EdlControllerTests : IDisposable
 
         Write(Personal(_userA, "Movie - 1080p"), EdlA);
         AssertServed(EdlA, await _plugin.GetAsync(_userA, hd, ifNoneMatch: tagA));
+    }
+
+    [Fact]
+    public async Task Validators_of_a_user_and_an_api_key_never_match_each_other()
+    {
+        Guid item = AddMovie(new[] { _userA });
+        Write("edl/Movie.edl", DefaultEdl);
+
+        PluginResponse user = await _plugin.GetAsync(_userA, item);
+        PluginResponse key = await _plugin.GetAsync(null, item, apiKey: true);
+        AssertServed(DefaultEdl, user);
+        AssertServed(DefaultEdl, key);
+        Assert.NotEqual(user.ETag, key.ETag);
+
+        AssertServed(DefaultEdl, await _plugin.GetAsync(null, item, ifNoneMatch: user.ETag, apiKey: true));
+        AssertServed(DefaultEdl, await _plugin.GetAsync(_userA, item, ifNoneMatch: key.ETag));
+        Assert.Equal(304, (await _plugin.GetAsync(null, item, ifNoneMatch: key.ETag, apiKey: true)).Status);
+        Assert.Equal(304, (await _plugin.GetAsync(_userA, item, ifNoneMatch: key.ETag, apiKey: true)).Status);
     }
 
     private static string Personal(User user, string stem = "Movie") => $"edl/{user.Id:N}/{stem}.user-{user.Id:N}.edl";

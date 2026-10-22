@@ -44,11 +44,16 @@ internal sealed class PluginHarness
     public static MediaSourceInfo Source(Guid id, string path, MediaProtocol protocol = MediaProtocol.File) =>
         new() { Id = id.ToString("N"), Path = path, Protocol = protocol };
 
-    /// <summary>Adds a video that only <paramref name="viewers"/> can see. Its first source is the item's own file.</summary>
+    /// <summary>
+    /// Adds a video that only <paramref name="viewers"/> can see as users. A server API key sees every video.
+    /// Its first source is the item's own file.
+    /// </summary>
     public Guid AddVideo(IEnumerable<User> viewers, params MediaSourceInfo[] sources)
     {
         Guid itemId = Guid.Parse(sources[0].Id);
         var video = new Video { Id = itemId, Path = sources[0].Path };
+        _library.Setup(l => l.GetItemById<Video>(itemId)).Returns(video);
+        _mediaSources.Setup(m => m.GetStaticMediaSources(video, false, null)).Returns(sources.ToList());
         foreach (User viewer in viewers)
         {
             _library.Setup(l => l.GetItemById<Video>(itemId, viewer)).Returns(video);

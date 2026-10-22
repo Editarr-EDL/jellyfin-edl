@@ -4,7 +4,7 @@ Each file describes one user-facing feature, how to reach it, how to drive it wi
 
 | Feature | File | Tier | Status |
 | --- | --- | --- | --- |
-| Personal and default EDL by item | [edl-by-item.md](edl-by-item.md) | Live and unit | Supported. `verify.py run` drives it with two users. |
+| Personal and default EDL by item | [edl-by-item.md](edl-by-item.md) | Live and unit | Supported. `verify.py run` drives it with two users and an API key. |
 | Export-layout contract fixtures | [export-layout-contract.md](export-layout-contract.md) | Unit | Grammar vectors and the 14 EDL selection cases run against the plugin. MCF cases are planned inputs. |
 
 Planned features have no live recipe yet.
