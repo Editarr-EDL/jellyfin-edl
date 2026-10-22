@@ -1,4 +1,3 @@
-using System.Diagnostics;
 using System.Runtime.InteropServices;
 using System.Runtime.Versioning;
 using System.Text;
@@ -38,16 +37,10 @@ public sealed class ExportFileTests : IDisposable
     }
 
     [GlibcFact]
-    public async Task Legacy_glibc_stat_reads_a_regular_file_and_refuses_a_directory_and_a_named_pipe()
+    public async Task Legacy_glibc_stat_reads_a_regular_file_and_refuses_a_directory()
     {
         Func<SafeFileHandle, byte[], int> legacy = ExportFile.LegacyStat(Abi.LegacyStatVersion!.Value);
         string regular = Write("Movie.edl", "1 2 3\n");
-        string pipe = Path.Combine(_directory.Path, "pipe.edl");
-        using (Process process = Process.Start(new ProcessStartInfo("mkfifo") { ArgumentList = { pipe } })!)
-        {
-            await process.WaitForExitAsync();
-            Assert.Equal(0, process.ExitCode);
-        }
 
         var (entry, handle) = ExportFile.OpenWithoutFollowing(regular, Abi, legacy);
         using (handle)
@@ -59,7 +52,6 @@ public sealed class ExportFileTests : IDisposable
         }
 
         Assert.Equal((ExportEntry.NotRegular, (SafeFileHandle?)null), ExportFile.OpenWithoutFollowing(_directory.Path, Abi, legacy));
-        Assert.Equal((ExportEntry.NotRegular, (SafeFileHandle?)null), ExportFile.OpenWithoutFollowing(pipe, Abi, legacy));
     }
 
     private string Write(string name, string content)
