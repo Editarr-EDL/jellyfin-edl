@@ -86,7 +86,7 @@ public sealed class EdlController : ControllerBase
         return await _selector.SelectAsync(media, format, cancellationToken).ConfigureAwait(false) switch
         {
             ExportSelection.Found found => new FileContentResult(found.Content, format.ContentType) { EntityTag = EntityTagFor(media, format, found.Content) },
-            ExportSelection.Invalid invalid => UnprocessableEntity(new EdlValidationErrorResponse(invalid.Diagnostics)),
+            ExportSelection.Invalid invalid => UnprocessableEntity(new ExportValidationErrorResponse(invalid.Diagnostics)),
             ExportSelection.Unreadable => StatusCode(StatusCodes.Status500InternalServerError),
             _ => NotFound(),
         };

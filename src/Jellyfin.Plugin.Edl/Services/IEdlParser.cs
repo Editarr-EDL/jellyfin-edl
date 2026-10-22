@@ -4,5 +4,5 @@ namespace Jellyfin.Plugin.Edl.Services;
 
 public interface IEdlParser
 {
-    EdlValidationResult Validate(string[] lines);
+    ExportValidationResult Validate(string[] lines);
 }

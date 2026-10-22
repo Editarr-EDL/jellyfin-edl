@@ -17,5 +17,5 @@ public interface IExportFormat
     /// <summary>Validates a file's exact bytes. An invalid file is reported, never served and never skipped.</summary>
     /// <param name="content">The file's bytes.</param>
     /// <returns>The validation result.</returns>
-    EdlValidationResult Validate(byte[] content);
+    ExportValidationResult Validate(byte[] content);
 }

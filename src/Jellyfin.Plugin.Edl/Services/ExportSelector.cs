@@ -12,8 +12,8 @@ namespace Jellyfin.Plugin.Edl.Services;
 /// </summary>
 public sealed class ExportSelector
 {
-    private static readonly IReadOnlyList<EdlValidationDiagnostic> NotARegularFile =
-        new[] { new EdlValidationDiagnostic(0, "The export path is not a regular file") };
+    private static readonly IReadOnlyList<ExportValidationDiagnostic> NotARegularFile =
+        new[] { new ExportValidationDiagnostic(0, "The export path is not a regular file") };
 
     private readonly ILogger<ExportSelector> _logger;
 
@@ -73,7 +73,7 @@ public sealed class ExportSelector
             return new ExportSelection.Unreadable(scope);
         }
 
-        EdlValidationResult validation = format.Validate(content);
+        ExportValidationResult validation = format.Validate(content);
         return validation.IsValid
             ? new ExportSelection.Found(scope, content)
             : new ExportSelection.Invalid(scope, validation.Diagnostics);
