@@ -1,0 +1,24 @@
+WEBVTT MovieContentFilter 1.1.0
+
+NOTE
+TITLE Ozymandias
+YEAR 2013
+TYPE episode
+SEASON 5
+EPISODE 14
+SOURCE https://www.moviecontentfilter.com/works/7Cmr6B
+IMDB https://www.imdb.com/title/tt2301451/
+RELEASE North America
+COMMENT Quite an intense episode!
+
+NOTE
+START 00:00:04.020
+END 01:24:00.100
+
+00:00:06.075 --> 00:00:10.500
+violence=high=both
+
+00:06:14.000 --> 00:06:17.581
+gambling=medium=both # Some comment
+drugs=high=video
+
