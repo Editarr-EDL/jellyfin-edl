@@ -21,6 +21,7 @@ sys.dont_write_bytecode = True
 import hashlib  # noqa: E402
 import secrets  # noqa: E402
 import subprocess  # noqa: E402
+import uuid  # noqa: E402
 import xml.etree.ElementTree as ElementTree  # noqa: E402
 from datetime import datetime, timezone  # noqa: E402
 from pathlib import Path  # noqa: E402
@@ -28,6 +29,7 @@ from pathlib import Path  # noqa: E402
 import evidence  # noqa: E402
 import instance  # noqa: E402
 import jellyfin_api  # noqa: E402
+import journey  # noqa: E402
 import library  # noqa: E402
 
 REPO = Path(__file__).resolve().parents[4]
@@ -109,22 +111,40 @@ def launch(directory: Path, run: dict) -> None:
     staged = instance.build_plugin(run_id, REPO, scratch, directory / "build.log")
     run["pluginSha256"] = sha256_file(staged / "Jellyfin.Plugin.Edl.dll")
     video = instance.generate_video(run_id, scratch, log)
-    files = library.build(manifest, FIXTURE, scratch / "media", video)
-    evidence.write_json(directory / "library.json", {"videoSha256": sha256_file(video), "files": files})
+    (scratch / "media").mkdir()
     run["port"] = instance.start(run, log)
     save(directory, run)
     client = client_for(run)
     evidence.write_json(directory / "server-public.json", jellyfin_api.wait_ready(client, 240))
-    password = secrets.token_urlsafe(24)
-    evidence.private_file(scratch / "secrets.json", {"password": password})
-    jellyfin_api.complete_wizard(client, ADMIN, password)
-    token, user_id = jellyfin_api.authenticate(client, ADMIN, password)
-    evidence.private_file(scratch / "secrets.json", {"password": password, "token": token})
-    client.token = token
+    hidden = {"password": secrets.token_urlsafe(24)}
+    evidence.private_file(scratch / "secrets.json", hidden)
+    jellyfin_api.complete_wizard(client, ADMIN, hidden["password"])
+    hidden["token"], admin_id = jellyfin_api.authenticate(client, ADMIN, hidden["password"])
+    evidence.private_file(scratch / "secrets.json", hidden)
+    client.token = hidden["token"]
+    users = {}
+    for name in journey.USERS:
+        hidden[f"{name}Password"] = secrets.token_urlsafe(24)
+        evidence.private_file(scratch / "secrets.json", hidden)
+        users[name] = uuid.UUID(jellyfin_api.create_user(client, f"jfedl-{name}", hidden[f"{name}Password"])).hex
+        hidden[f"{name}Token"], _ = jellyfin_api.authenticate(client_for(run), f"jfedl-{name}", hidden[f"{name}Password"])
+        evidence.private_file(scratch / "secrets.json", hidden)
+    hidden["apiKey"] = jellyfin_api.create_api_key(client, "jfedl-verify")
+    evidence.private_file(scratch / "secrets.json", hidden)
+    export_ids = {manifest["principals"][name]["exportId"]: users[name] for name in journey.USERS}
+    files = library.build(manifest, FIXTURE, scratch / "media", video, export_ids)
+    evidence.write_json(directory / "library.json", {"videoSha256": sha256_file(video), "files": files})
     jellyfin_api.add_movie_library(client, "Synthetic", f"/media/{library.LIBRARY_DIR}")
-    paths = {library.media_path(case) for case in library.edl_cases(manifest)}
+    jellyfin_api.add_movie_library(client, "Restricted", f"/media/{library.RESTRICTED_DIR}")
+    jellyfin_api.limit_libraries(client, users["userB"], [jellyfin_api.library_ids(client)["Synthetic"]])
+    restricted = next(c for c in library.edl_cases(manifest) if c["name"] == library.RESTRICTED_CASE)
+    paths = ({library.media_path(case) for case in library.edl_cases(manifest)} | set(library.version_paths())
+             | {library.media_path(restricted, library.RESTRICTED_DIR)})
     items = jellyfin_api.wait_for_movies(client, paths, 300)
-    evidence.write_json(directory / "items.json", {"adminUserId": user_id, "items": items})
+    reads = [instance.docker("exec", run["container"], "cat", path, check=False, log=log).returncode == 0
+             for path in library.unreadable_paths(manifest, export_ids)]
+    evidence.write_json(directory / "items.json", {"adminUserId": admin_id, "users": users, "items": items,
+                                                  "serverReadsMode000": all(reads)})
 
 
 def doctor(directory: Path) -> bool:
@@ -177,34 +197,21 @@ def doctor(directory: Path) -> bool:
 
 
 def drive(directory: Path) -> bool:
-    """Request every synthetic movie through GET /Plugins/Edl/ByItem/{id} and compare with the legacy rule."""
+    """Run the two-user journey over GET /Plugins/Edl/ByItem/{id} and record every check in drive.json."""
     run = evidence.read_json(directory / "run.json")
     manifest = library.load_manifest(FIXTURE)
-    items = evidence.read_json(directory / "items.json")["items"]
-    client = client_for(run, secrets_of(run)["token"])
-    route = "/Plugins/Edl/ByItem/{}"
-    first = items[library.media_path(library.edl_cases(manifest)[0])]
-    anonymous = client.request("GET", route.format(first), authenticated=False).status
-    cases = []
-    for case in library.edl_cases(manifest):
-        expected = library.legacy_expectation(case, manifest)
-        response = client.request("GET", route.format(items[library.media_path(case)]))
-        content_type = response.headers.get("Content-Type", "")
-        result = {"case": case["name"], "plannedContract": case["expect"]["outcome"], "expected": expected,
-                  "status": response.status, "contentType": content_type,
-                  "bodySha256": hashlib.sha256(response.body).hexdigest(), "bodyBytes": len(response.body)}
-        ok = response.status == expected["status"]
-        if expected["payload"]:
-            payload = manifest["payloads"][expected["payload"]]
-            ok = ok and content_type.startswith("text/plain") and result["bodySha256"] == payload["sha256"]
-            result["body"] = response.body.decode("utf-8", "replace")
-        result["ok"] = ok
-        cases.append(result)
-    ok = anonymous == 401 and all(c["ok"] for c in cases)
-    evidence.write_json(directory / "drive.json", {"ok": ok, "route": "GET /Plugins/Edl/ByItem/{itemId}",
-                                                  "unauthenticatedStatus": anonymous, "cases": cases})
-    print(f"drive {'ok' if ok else 'FAILED'}: unauthenticated={anonymous}, "
-          f"{sum(c['ok'] for c in cases)}/{len(cases)} cases match the legacy selector")
+    state = evidence.read_json(directory / "items.json")
+    hidden = secrets_of(run)
+    clients = {"anonymous": client_for(run), "apiKey": client_for(run, hidden["apiKey"]),
+               **{name: client_for(run, hidden[f"{name}Token"]) for name in journey.USERS}}
+    checks = journey.run(clients, manifest, state["items"], state["users"], state["serverReadsMode000"])
+    ok = all(check["ok"] for check in checks)
+    evidence.write_json(directory / "drive.json", {"ok": ok, "route": "GET " + journey.ROUTE.format("{itemId}"),
+                                                  "users": state["users"],
+                                                  "serverReadsMode000": state["serverReadsMode000"], "checks": checks})
+    failed = [check["check"] for check in checks if not check["ok"]]
+    print(f"drive {'ok' if ok else 'FAILED'}: {len(checks) - len(failed)}/{len(checks)} checks pass"
+          + (f"; failed: {failed}" if failed else ""))
     return ok
 
 

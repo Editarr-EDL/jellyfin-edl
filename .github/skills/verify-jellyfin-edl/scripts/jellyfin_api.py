@@ -30,12 +30,13 @@ class Jellyfin:
         self.device_id = device_id
         self.token = token
 
-    def request(self, method: str, path: str, body: object = None, authenticated: bool = True) -> Response:
+    def request(self, method: str, path: str, body: object = None, authenticated: bool = True,
+                headers: dict | None = None) -> Response:
         header = CLIENT.format(device=self.device_id)
         if authenticated and self.token:
             header += f', Token="{self.token}"'
         data = None if body is None else json.dumps(body).encode()
-        request = urllib.request.Request(self.base_url + path, data=data, method=method)
+        request = urllib.request.Request(self.base_url + path, data=data, method=method, headers=headers or {})
         request.add_header("Authorization", header)
         if data is not None:
             request.add_header("Content-Type", "application/json")
@@ -88,6 +89,30 @@ def authenticate(client: Jellyfin, username: str, password: str) -> tuple[str, s
     return payload["AccessToken"], payload["User"]["Id"]
 
 
+def create_user(client: Jellyfin, username: str, password: str) -> str:
+    """Create an ordinary user as the administrator and return its ID."""
+    return client.expect("POST", "/Users/New", (200,), {"Name": username, "Password": password}).json()["Id"]
+
+
+def limit_libraries(client: Jellyfin, user_id: str, library_ids: list) -> None:
+    """Replace a user's library access with exactly the given libraries."""
+    policy = client.expect("GET", f"/Users/{user_id}", (200,)).json()["Policy"]
+    policy.update({"EnableAllFolders": False, "EnabledFolders": library_ids})
+    client.expect("POST", f"/Users/{user_id}/Policy", (200, 204), policy)
+
+
+def library_ids(client: Jellyfin) -> dict:
+    """Return library name -> library ID."""
+    return {folder["Name"]: folder["ItemId"] for folder in client.expect("GET", "/Library/VirtualFolders", (200,)).json()}
+
+
+def create_api_key(client: Jellyfin, app: str) -> str:
+    """Create a server API key named app and return its token."""
+    client.expect("POST", f"/Auth/Keys?app={app}", (200, 204))
+    keys = client.expect("GET", "/Auth/Keys", (200,)).json()["Items"]
+    return next(key["AccessToken"] for key in keys if key.get("AppName") == app)
+
+
 def add_movie_library(client: Jellyfin, name: str, path: str) -> None:
     """Create a movie library with every internet metadata and image fetcher disabled."""
     no_fetchers = {"Type": "Movie", "MetadataFetchers": [], "MetadataFetcherOrder": [],
@@ -103,7 +128,7 @@ def library_scan_idle(client: Jellyfin) -> bool:
 
 
 def wait_for_movies(client: Jellyfin, paths: set, timeout: float) -> dict:
-    """Poll until every expected media path is a Movie item; return path -> item ID.
+    """Poll until every expected media path is a source of a Movie item; return path -> {item, source}.
 
     Adding a library during the startup scan can cancel that scan without
     running the requested one, so an idle scan task with items missing gets
@@ -112,8 +137,9 @@ def wait_for_movies(client: Jellyfin, paths: set, timeout: float) -> dict:
     deadline = time.monotonic() + timeout
     found = {}
     while time.monotonic() < deadline:
-        items = client.expect("GET", "/Items?Recursive=true&IncludeItemTypes=Movie&Fields=Path", (200,)).json()["Items"]
-        found = {item["Path"]: item["Id"] for item in items if item.get("Path") in paths}
+        items = client.expect("GET", "/Items?Recursive=true&IncludeItemTypes=Movie&Fields=Path,MediaSources", (200,)).json()["Items"]
+        found = {source["Path"]: {"item": item["Id"], "source": source["Id"]}
+                 for item in items for source in item.get("MediaSources") or [] if source.get("Path") in paths}
         if len(found) == len(paths):
             return found
         if library_scan_idle(client):
