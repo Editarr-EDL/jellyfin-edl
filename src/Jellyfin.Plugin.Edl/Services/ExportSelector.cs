@@ -63,9 +63,7 @@ public sealed class ExportSelector
 
             using var stream = new FileStream(handle, FileAccess.Read, bufferSize: 0);
             BeforeRead?.Invoke(path);
-            using var buffer = new MemoryStream();
-            await stream.CopyToAsync(buffer, cancellationToken).ConfigureAwait(false);
-            content = buffer.ToArray();
+            content = await ReadAtMostAsync(stream, ExportFile.MaxContentBytes + 1, cancellationToken).ConfigureAwait(false);
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
@@ -77,5 +75,20 @@ public sealed class ExportSelector
         return validation.IsValid
             ? new ExportSelection.Found(scope, content)
             : new ExportSelection.Invalid(scope, validation.Diagnostics);
+    }
+
+    // One byte past the limit is enough for the format to reject a file of any size, even one still growing.
+    private static async Task<byte[]> ReadAtMostAsync(Stream stream, int count, CancellationToken cancellationToken)
+    {
+        using var buffer = new MemoryStream();
+        byte[] chunk = new byte[81_920];
+        int read;
+        while (buffer.Length < count
+            && (read = await stream.ReadAsync(chunk.AsMemory(0, (int)Math.Min(chunk.Length, count - buffer.Length)), cancellationToken).ConfigureAwait(false)) > 0)
+        {
+            buffer.Write(chunk, 0, read);
+        }
+
+        return buffer.ToArray();
     }
 }

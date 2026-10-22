@@ -101,6 +101,9 @@ The validator currently supports:
 
 Validation rules:
 
+- The file is at most 1 MiB, as in Editarr's EDL parser. The plugin reads at
+  most one byte past that limit from either format's file, so a larger file is
+  reported as invalid without being read whole.
 - `start` and `end` must parse as invariant-culture numbers.
 - `end` must be greater than `start`.
 - Action token must be in the supported action set.

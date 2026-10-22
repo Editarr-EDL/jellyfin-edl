@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.Runtime.Versioning;
+using System.Text;
 using Jellyfin.Plugin.Edl.Models;
 using Jellyfin.Plugin.Edl.Services;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -9,7 +10,7 @@ namespace Jellyfin.Plugin.Edl.Tests.Contract;
 /// <summary>
 /// Selection rules of editarr-export-layout-1 that the frozen v1 manifest has no case for: symbolic links,
 /// named pipes, a link swapped in after the check, linked export folders, an unsearchable personal directory,
-/// an unreadable default, refused media names, and a server API key. Each case pairs the selector outcome
+/// an unreadable default, refused media names, a server API key, and the 1 MiB size limit. Each case pairs the selector outcome
 /// with the HTTP status of the format's route and runs for EDL and for MCF. These cases are local to the plugin
 /// and do not change v1.
 /// </summary>
@@ -189,6 +190,81 @@ public abstract class SupplementalSelectionTests : IDisposable
         await AssertOutcomeAsync(media, "none", 404);
     }
 
+    [Fact]
+    public async Task Personal_file_at_the_size_limit_is_served_whole()
+    {
+        byte[] content = ValidOfSize(ExportFile.MaxContentBytes);
+        WriteBytes(Personal, content);
+        Write(Default, "default");
+
+        ExportSelection selection = await SelectAsync(new ExportSelector(NullLogger<ExportSelector>.Instance), PluginHarness.Format(_format));
+
+        Assert.Equal(content, Assert.IsType<ExportSelection.Found>(selection).Content);
+        await AssertOutcomeAsync("Movie.mkv", "personal", 200);
+    }
+
+    [Fact]
+    public async Task Personal_file_one_byte_over_the_size_limit_is_invalid_even_with_a_valid_prefix_and_does_not_fall_back()
+    {
+        WriteBytes(Personal, [.. ValidOfSize(ExportFile.MaxContentBytes), (byte)'\n']);
+        Write(Default, "default");
+
+        ExportSelection selection = await SelectAsync(new ExportSelector(NullLogger<ExportSelector>.Instance), PluginHarness.Format(_format));
+
+        Assert.Equal(
+            new ExportValidationDiagnostic(0, $"{_format.ToUpperInvariant()} content exceeds the size limit"),
+            Assert.Single(Assert.IsType<ExportSelection.Invalid>(selection).Diagnostics));
+        await AssertOutcomeAsync("Movie.mkv", "personal_invalid", 422);
+    }
+
+    [Fact]
+    public async Task File_growing_past_the_size_limit_after_the_check_is_read_at_most_one_byte_past_the_limit()
+    {
+        WriteBytes(Personal, ValidOfSize(ExportFile.MaxContentBytes));
+        Write(Default, "default");
+        var format = new RecordingFormat(PluginHarness.Format(_format));
+        var selector = new ExportSelector(NullLogger<ExportSelector>.Instance)
+        {
+            BeforeRead = path =>
+            {
+                using var file = new FileStream(path, FileMode.Open, FileAccess.Write);
+                file.SetLength(8 * ExportFile.MaxContentBytes);
+            },
+        };
+
+        ExportSelection selection = await SelectAsync(selector, format);
+
+        Assert.Equal("personal_invalid", selection.Outcome);
+        Assert.InRange(format.LargestContent, 0, ExportFile.MaxContentBytes + 1);
+    }
+
+    private Task<ExportSelection> SelectAsync(ExportSelector selector, IExportFormat format)
+    {
+        string mediaPath = Path.Combine(_directory.Path, "Movie.mkv");
+        Guid itemId = Guid.NewGuid();
+        return selector.SelectAsync(new AuthorizedMedia(new Requester.Account(UserId), itemId, itemId, mediaPath), format, CancellationToken.None);
+    }
+
+    // A valid file of exactly size bytes, padded with EDL comment lines or MCF payload comments.
+    private byte[] ValidOfSize(int size)
+    {
+        if (_format == "edl")
+        {
+            return Encoding.ASCII.GetBytes("#" + new string('x', size - 2) + "\n");
+        }
+
+        var text = new StringBuilder("WEBVTT MovieContentFilter 1.1.0\n\nNOTE\nSTART 00:00:00.000\nEND 00:10:00.000\n\n00:00:01.000 --> 00:00:02.000\n");
+        int remaining = size - text.Length;
+        int lines = (remaining + 3_999) / 4_000;
+        for (int i = 0; i < lines; i++)
+        {
+            int length = (remaining / lines) + (i < remaining % lines ? 1 : 0);
+            text.Append("fear=low # ").Append('x', length - 12).Append('\n');
+        }
+
+        return Encoding.ASCII.GetBytes(text.ToString());
+    }
+
     private async Task AssertOutcomeAsync(string media, string outcome, int status, bool serverKey = false)
     {
         string mediaPath = Path.Combine(_directory.Path, media);
@@ -236,11 +312,33 @@ public abstract class SupplementalSelectionTests : IDisposable
         File.WriteAllBytes(path, Payload(payload));
     }
 
+    private void WriteBytes(string relativePath, byte[] content)
+    {
+        string path = Path.Combine(_directory.Path, relativePath);
+        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+        File.WriteAllBytes(path, content);
+    }
+
     private void Link(string relativePath, string relativeTarget)
     {
         string path = Path.Combine(_directory.Path, relativePath);
         Directory.CreateDirectory(Path.GetDirectoryName(path)!);
         File.CreateSymbolicLink(path, Path.Combine(_directory.Path, relativeTarget));
+    }
+
+    private sealed class RecordingFormat(IExportFormat inner) : IExportFormat
+    {
+        public int LargestContent { get; private set; }
+
+        public string Name => inner.Name;
+
+        public string ContentType => inner.ContentType;
+
+        public ExportValidationResult Validate(byte[] content)
+        {
+            LargestContent = Math.Max(LargestContent, content.Length);
+            return inner.Validate(content);
+        }
     }
 }
 

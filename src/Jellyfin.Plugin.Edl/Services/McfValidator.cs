@@ -13,7 +13,6 @@ namespace Jellyfin.Plugin.Edl.Services;
 /// </summary>
 internal static partial class McfValidator
 {
-    public const int MaxContentBytes = 1_048_576;
     public const int MaxLineCodePoints = 4_096;
     public const int MaxPayloadEntries = 10_000;
 
@@ -62,7 +61,7 @@ internal static partial class McfValidator
 
     private static string[] Lines(byte[] content)
     {
-        if (content.Length > MaxContentBytes)
+        if (content.Length > ExportFile.MaxContentBytes)
         {
             throw new Invalid(0, "MCF content exceeds the size limit");
         }

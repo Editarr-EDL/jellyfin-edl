@@ -24,6 +24,11 @@ public sealed class EdlExportFormat : IExportFormat
     /// <inheritdoc />
     public ExportValidationResult Validate(byte[] content)
     {
+        if (content.Length > ExportFile.MaxContentBytes)
+        {
+            return ExportValidationResult.Invalid([new ExportValidationDiagnostic(0, "EDL content exceeds the size limit")]);
+        }
+
         // The export-layout contract pins validity to File.ReadAllLines, which decodes exactly like this reader.
         using var reader = new StreamReader(new MemoryStream(content), Encoding.UTF8, detectEncodingFromByteOrderMarks: true);
         var lines = new List<string>();
