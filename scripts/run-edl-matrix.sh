@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-: "${JELLYFIN_API_KEY:?Set JELLYFIN_API_KEY}"
+: "${JELLYFIN_USER_TOKEN:?Set JELLYFIN_USER_TOKEN to a signed-in user access token}"
 : "${JELLYFIN_ITEM_ID_VALID:?Set JELLYFIN_ITEM_ID_VALID}"
 : "${JELLYFIN_ITEM_ID_MISSING_EDL:?Set JELLYFIN_ITEM_ID_MISSING_EDL}"
 : "${JELLYFIN_ITEM_ID_INVALID_EDL:?Set JELLYFIN_ITEM_ID_INVALID_EDL}"
@@ -11,7 +11,7 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 run_case() {
   local item_id="$1"
   local expected="$2"
-  JELLYFIN_API_KEY="$JELLYFIN_API_KEY" \
+  JELLYFIN_USER_TOKEN="$JELLYFIN_USER_TOKEN" \
   JELLYFIN_ITEM_ID="$item_id" \
   EXPECTED_STATUS="$expected" \
   "$ROOT_DIR/scripts/jellyfin-smoke.sh"

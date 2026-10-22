@@ -1,15 +1,10 @@
 using System.Text;
-using Jellyfin.Plugin.Edl.Api;
-using Jellyfin.Plugin.Edl.Models;
-using Jellyfin.Plugin.Edl.Services;
-using Microsoft.AspNetCore.Mvc;
-using Microsoft.Extensions.Logging.Abstractions;
-using Moq;
 
 namespace Jellyfin.Plugin.Edl.Tests.Contract;
 
 /// <summary>
-/// Runs MU-01 EDL grammar vectors and EDL payloads through the controller's real file read and parser.
+/// Serves MU-01 EDL grammar vectors and EDL payloads as a default export through the real request path.
+/// A valid file comes back byte for byte; an invalid one is 422.
 /// </summary>
 public sealed class EdlGrammarVectorTests
 {
@@ -24,40 +19,36 @@ public sealed class EdlGrammarVectorTests
     public async Task Plugin_agrees_with_the_editarr_grammar_vector(string name)
     {
         GrammarVector vector = ExportLayoutFixture.Manifest.GrammarVectors.Single(v => v.Name == name);
-        using var directory = new TempDirectory();
-        string path = Path.Combine(directory.Path, "vector.edl");
-        File.WriteAllBytes(path, new UTF8Encoding(false).GetBytes(vector.Content));
 
-        AssertValidity(vector.Valid, await ServeAsync(path));
+        await AssertServedAsync(vector.Valid, new UTF8Encoding(false).GetBytes(vector.Content));
     }
 
     [Theory]
     [MemberData(nameof(EdlPayloadIds))]
     public async Task Plugin_agrees_with_the_editarr_payload_validity(string payloadId)
     {
-        Payload payload = ExportLayoutFixture.Manifest.Payloads[payloadId];
-
-        AssertValidity(payload.Valid, await ServeAsync(Path.Combine(ExportLayoutFixture.Root, payload.File)));
+        await AssertServedAsync(ExportLayoutFixture.Manifest.Payloads[payloadId].Valid, ExportLayoutFixture.PayloadBytes(payloadId));
     }
 
-    private static void AssertValidity(bool valid, IActionResult result)
+    private static async Task AssertServedAsync(bool valid, byte[] content)
     {
+        using var directory = new TempDirectory();
+        Directory.CreateDirectory(Path.Combine(directory.Path, "edl"));
+        File.WriteAllBytes(Path.Combine(directory.Path, "edl", "Movie.edl"), content);
+        var plugin = new PluginHarness();
+        var user = PluginHarness.NewUser(Guid.NewGuid());
+        Guid item = plugin.AddVideo(new[] { user }, PluginHarness.Source(Guid.NewGuid(), Path.Combine(directory.Path, "Movie.mkv")));
+
+        PluginResponse response = await plugin.GetAsync(user, item);
+
         if (valid)
         {
-            Assert.IsType<ContentResult>(result);
+            Assert.Equal(200, response.Status);
+            Assert.Equal(content, response.Body);
         }
         else
         {
-            Assert.IsType<UnprocessableEntityObjectResult>(result);
+            Assert.Equal(422, response.Status);
         }
-    }
-
-    private static Task<IActionResult> ServeAsync(string edlPath)
-    {
-        var lookup = new Mock<IEdlLookupService>();
-        lookup.Setup(x => x.ResolveByItemId(It.IsAny<Guid>()))
-            .Returns(EdlLookupResult.Found("/media/Movie.mkv", edlPath));
-        var controller = new EdlController(lookup.Object, new EdlParser(), NullLogger<EdlController>.Instance);
-        return controller.GetByItemId(Guid.NewGuid(), CancellationToken.None);
     }
 }

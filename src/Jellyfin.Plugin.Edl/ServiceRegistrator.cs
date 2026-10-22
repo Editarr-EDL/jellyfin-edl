@@ -9,8 +9,9 @@ public sealed class ServiceRegistrator : IPluginServiceRegistrator
 {
     public void RegisterServices(IServiceCollection serviceCollection, IServerApplicationHost applicationHost)
     {
-        serviceCollection.AddSingleton<ILibraryItemResolver, JellyfinLibraryItemResolver>();
-        serviceCollection.AddSingleton<IEdlLookupService, EdlLookupService>();
         serviceCollection.AddSingleton<IEdlParser, EdlParser>();
+        serviceCollection.AddSingleton<EdlExportFormat>();
+        serviceCollection.AddSingleton<AuthorizedMediaResolver>();
+        serviceCollection.AddSingleton<ExportSelector>();
     }
 }

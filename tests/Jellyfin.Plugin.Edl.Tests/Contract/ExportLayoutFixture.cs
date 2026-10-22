@@ -19,11 +19,20 @@ internal sealed record SelectionCase(
     IReadOnlyList<SelectionEntry> Entries,
     SelectionExpectation Expect);
 
+internal sealed record Principal(string Kind, string? ProviderInput, string ExportId);
+
+internal sealed record MediaName(string Name, string? Stem, string? Error);
+
+internal sealed record LayoutPath(string Style, string Media, string Principal, string Format, string Personal, string Default, string Legacy);
+
 internal sealed record ExportLayoutManifest(
     string Contract,
     IReadOnlyList<GrammarVector> GrammarVectors,
     IReadOnlyDictionary<string, Payload> Payloads,
-    IReadOnlyList<SelectionCase> Selection);
+    IReadOnlyList<SelectionCase> Selection,
+    IReadOnlyDictionary<string, Principal> Principals,
+    IReadOnlyList<MediaName> MediaNames,
+    IReadOnlyList<LayoutPath> Paths);
 
 /// <summary>
 /// Loads the Editarr export-layout-v1 contract copied next to the test assembly.
@@ -48,6 +57,9 @@ internal static class ExportLayoutFixture
 
     public static SelectionCase Case(string name) => Manifest.Selection.Single(c => c.Name == name);
 
+    /// <summary>The Jellyfin user ID a selection case's principal names.</summary>
+    public static Guid UserId(string principal) => Guid.Parse(Manifest.Principals[principal].ExportId);
+
     private static ExportLayoutManifest Load()
     {
         using JsonDocument document = JsonDocument.Parse(File.ReadAllBytes(Path.Combine(Root, "manifest.json")));
@@ -56,7 +68,10 @@ internal static class ExportLayoutFixture
             root.GetProperty("contract").GetString()!,
             Read<List<GrammarVector>>(root.GetProperty("edlGrammar").GetProperty("vectors")),
             Read<Dictionary<string, Payload>>(root.GetProperty("payloads")),
-            Read<List<SelectionCase>>(root.GetProperty("selection")));
+            Read<List<SelectionCase>>(root.GetProperty("selection")),
+            Read<Dictionary<string, Principal>>(root.GetProperty("principals")),
+            Read<List<MediaName>>(root.GetProperty("mediaNames")),
+            Read<List<LayoutPath>>(root.GetProperty("paths")));
     }
 
     private static T Read<T>(JsonElement element) => element.Deserialize<T>(Options)!;

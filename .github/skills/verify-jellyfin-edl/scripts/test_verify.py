@@ -30,28 +30,60 @@ class LibraryTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 library.load_manifest(Path(directory))
 
-    def test_legacy_rule_reads_only_the_adjacent_sidecar(self):
-        expected = {case["name"]: library.legacy_expectation(case, self.manifest)["status"]
-                    for case in library.edl_cases(self.manifest)}
-        self.assertEqual(len(expected), 14)
-        self.assertEqual(expected["edl-personal-before-default"], 200)
-        self.assertEqual(expected["edl-legacy-is-never-fallback"], 200)
-        self.assertEqual(expected["edl-malformed-personal-does-not-fall-back"], 404)
-        self.assertEqual(expected["version-2160p-uses-its-own-default"], 404)
+    def test_contract_reference_agrees_with_every_edl_case(self):
+        for case in library.edl_cases(self.manifest):
+            export_id = self.manifest["principals"][case["principal"]]["exportId"]
+            expected = library.contract_expectation(case, export_id, self.manifest)
+            self.assertEqual(expected["outcome"], case["expect"]["outcome"], case["name"])
+            self.assertEqual(expected["payload"], case["expect"].get("payload"), case["name"])
+        self.assertEqual(len(library.edl_cases(self.manifest)), 14)
 
-    def test_build_writes_exact_payload_bytes_and_modes(self):
+    def test_a_server_that_reads_mode_000_changes_only_the_unreadable_case(self):
+        changed = [case["name"] for case in library.edl_cases(self.manifest)
+                   if library.contract_expectation(case, self.manifest["principals"][case["principal"]]["exportId"],
+                                                   self.manifest, server_reads_mode_000=True)["outcome"] != case["expect"]["outcome"]]
+        self.assertEqual(changed, ["edl-unreadable-personal-does-not-fall-back"])
+
+    def test_a_server_key_expects_only_the_default_whatever_personal_files_exist(self):
+        by_name = {case["name"]: case for case in library.edl_cases(self.manifest)}
+        expected = {
+            "edl-personal-before-default": ("default", "edl-default"),
+            "edl-each-user-gets-own-file": ("default", "edl-default"),
+            "edl-malformed-personal-does-not-fall-back": ("default", "edl-default"),
+            "edl-unreadable-personal-does-not-fall-back": ("default", "edl-default"),
+            "edl-directory-at-personal-path-is-invalid": ("default", "edl-default"),
+            "version-1080p-has-personal": ("none", None),
+            "edl-malformed-default": ("default_invalid", None),
+            "edl-legacy-is-never-fallback": ("none", None),
+        }
+        for name, (outcome, payload) in expected.items():
+            result = library.contract_expectation(by_name[name], None, self.manifest)
+            self.assertEqual((result["outcome"], result["payload"]), (outcome, payload), name)
+
+    def test_build_writes_exact_payload_bytes_and_modes_under_live_user_ids(self):
+        live_a = "a" * 32
+        export_ids = {self.manifest["principals"]["userA"]["exportId"]: live_a}
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             video = root / "video.mkv"
             video.write_bytes(b"synthetic")
-            written = library.build(self.manifest, FIXTURE, root / "media", video)
+            written = library.build(self.manifest, FIXTURE, root / "media", video, export_ids)
             case = root / "media" / library.LIBRARY_DIR / "edl-unreadable-personal-does-not-fall-back"
-            personal = next(case.glob("edl/*/Movie.user-*.edl"))
+            personal = case / "edl" / live_a / f"Movie.user-{live_a}.edl"
             self.assertEqual(stat.S_IMODE(personal.stat().st_mode), 0)
             self.assertEqual((case / "edl" / "Movie.edl").read_bytes(), (FIXTURE / "payloads" / "default.edl").read_bytes())
             self.assertTrue((root / "media" / library.LIBRARY_DIR / "edl-directory-at-personal-path-is-invalid" / "edl"
-                             / "5a4de0c29b1e4f3a8c6d0e1f2a3b4c5d" / "Movie.user-5a4de0c29b1e4f3a8c6d0e1f2a3b4c5d.edl").is_dir())
-            self.assertEqual(len(written), 14 + sum(len(c["entries"]) for c in library.edl_cases(self.manifest)))
+                             / live_a / f"Movie.user-{live_a}.edl").is_dir())
+            self.assertFalse(any("5a4de0c29b1e4f3a8c6d0e1f2a3b4c5d" in path for path in written))
+            versions = root / "media" / library.LIBRARY_DIR / "Movie"
+            self.assertEqual(sorted(p.name for p in versions.glob("*.mkv")), sorted(library.VERSION_MEDIA))
+            self.assertTrue((versions / "edl" / live_a / f"Movie - 1080p.user-{live_a}.edl").is_file())
+            self.assertTrue((root / "media" / library.RESTRICTED_DIR / library.RESTRICTED_CASE / "Movie.mkv").is_file())
+            cases = library.edl_cases(self.manifest)
+            by_name = {c["name"]: c for c in cases}
+            self.assertEqual(len(written), 14 + sum(len(c["entries"]) for c in cases)
+                             + 2 + len(by_name[library.VERSIONS_CASE]["entries"])
+                             + 1 + len(by_name[library.RESTRICTED_CASE]["entries"]))
             personal.chmod(0o600)
 
 
@@ -85,12 +117,13 @@ class ReadinessTests(unittest.TestCase):
                 if path == "/Library/Refresh":
                     scans.append("Completed")
                     return jellyfin_api.Response(204, {}, b"")
-                items = [{"Path": "/media/a.mkv", "Id": "1"}] if scans[-1] == "Completed" else []
+                items = [{"Path": "/media/a.mkv", "Id": "1", "MediaSources": [{"Path": "/media/a.mkv", "Id": "s1"}]}] \
+                    if scans[-1] == "Completed" else []
                 return jellyfin_api.Response(200, {}, json.dumps({"Items": items}).encode())
 
         with unittest.mock.patch.object(jellyfin_api.time, "sleep"):
             found = jellyfin_api.wait_for_movies(Server("http://127.0.0.1:1", "test"), {"/media/a.mkv"}, 60)
-        self.assertEqual(found, {"/media/a.mkv": "1"})
+        self.assertEqual(found, {"/media/a.mkv": {"item": "1", "source": "s1"}})
         self.assertEqual(requests, ["GET /Items", "GET /ScheduledTasks", "POST /Library/Refresh", "GET /Items"])
 
 
