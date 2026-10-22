@@ -2,7 +2,9 @@
 """Verify the Jellyfin EDL plugin: .NET unit tier and a disposable real Jellyfin HTTP tier.
 
 Usage:
-  verify.py test [--filter EXPR]     dotnet test in a disposable SDK container
+  verify.py test [--filter EXPR] [--old-glibc]
+                                     dotnet test in a disposable SDK container, or with that
+                                     SDK in Rocky Linux 8 (glibc 2.28) for --old-glibc
   verify.py run [--inject-failure]   launch, doctor, drive, then always clean up
   verify.py launch                   start an instance and print its evidence dir
   verify.py doctor EVIDENCE_DIR      read-only health check of a launched instance
@@ -73,11 +75,12 @@ def secrets_of(run: dict) -> dict:
 
 
 def command_test(argv: list) -> int:
-    directory, run = new_run("dotnet-unit")
+    old_glibc = "--old-glibc" in argv
+    directory, run = new_run("dotnet-unit-old-glibc" if old_glibc else "dotnet-unit")
     test_filter = f' --filter "{argv[argv.index("--filter") + 1]}"' if "--filter" in argv else ""
     save(directory, run)
     try:
-        run["images"] = instance.preflight([instance.SDK_IMAGE])
+        run["images"] = instance.preflight([instance.SDK_IMAGE, *([instance.OLD_GLIBC_IMAGE] if old_glibc else [])])
     except instance.Blocked as error:
         run["blocked"] = str(error)
         save(directory, run)
@@ -86,14 +89,14 @@ def command_test(argv: list) -> int:
     run["exit"] = instance.sdk_run(run["runId"], REPO, [(directory, "/evidence")],
                                    f'dotnet test {TEST_PROJECT} -c Release{test_filter} '
                                    '--logger "trx;LogFileName=/evidence/dotnet-test.trx" '
-                                   '--logger "console;verbosity=detailed"', directory / "dotnet-test.log")
+                                   '--logger "console;verbosity=detailed"', directory / "dotnet-test.log", old_glibc)
     trx = directory / "dotnet-test.trx"
     if trx.exists():
         counters = ElementTree.parse(trx).getroot().find(".//{*}ResultSummary/{*}Counters")
         run["counters"] = {key: int(counters.get(key)) for key in ("total", "executed", "passed", "failed")}
     save(directory, run)
     ok = run["exit"] == 0 and run.get("counters", {}).get("failed") == 0
-    print(f"{'PASS' if ok else 'FAIL'} dotnet-unit {run.get('counters')}\nevidence: {directory}")
+    print(f"{'PASS' if ok else 'FAIL'} {run['kind']} {run.get('counters')}\nevidence: {directory}")
     return 0 if ok else 1
 
 

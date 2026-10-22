@@ -15,6 +15,7 @@ from pathlib import Path
 
 DOCKER = shutil.which("docker") or "/usr/local/bin/docker"
 SDK_IMAGE = "mcr.microsoft.com/dotnet/sdk:10.0"
+OLD_GLIBC_IMAGE = "rockylinux/rockylinux:8.10"
 JELLYFIN_IMAGE = "jellyfin/jellyfin@sha256:baba630419915985442f315f08b0cf46d9f4c8a0cc4bd38e94a6d35751dd5ef5"
 JELLYFIN_TAG = "jellyfin/jellyfin:12.0.20260908-012347"
 FFMPEG = "/usr/lib/jellyfin-ffmpeg/ffmpeg"
@@ -98,15 +99,30 @@ def user_flag() -> str:
     return f"{os.getuid()}:{os.getgid()}"
 
 
-def sdk_run(run_id: str, repo: Path, mounts: list, script: str, log: Path) -> int:
-    """Run a bash script in a disposable SDK container over a read-only copy of the checkout."""
+def sdk_run(run_id: str, repo: Path, mounts: list, script: str, log: Path, old_glibc: bool = False) -> int:
+    """Run a bash script in a disposable SDK container over a read-only copy of the checkout.
+
+    With old_glibc, the SDK image's dotnet tree is copied into a run-labelled volume and the script
+    runs in OLD_GLIBC_IMAGE (glibc 2.28) instead. The volume is removed afterwards.
+    """
     args = ["run", "--rm", "--name", f"{run_id}-sdk", "--label", f"{LABEL}={run_id}", "--user", user_flag(),
             "-e", "HOME=/tmp", "-e", "DOTNET_CLI_TELEMETRY_OPTOUT=1", "-e", "DOTNET_NOLOGO=1",
             "-v", f"{repo}:/src:ro"]
     for host, container in mounts:
         args += ["-v", f"{host}:{container}"]
-    args += [SDK_IMAGE, "bash", "-c", f"set -eo pipefail; {COPY_SOURCE}; {script}"]
-    return docker(*args, check=False, log=log).returncode
+    if not old_glibc:
+        return docker(*args, SDK_IMAGE, "bash", "-c", f"set -eo pipefail; {COPY_SOURCE}; {script}", check=False, log=log).returncode
+    volume = f"{run_id}-dotnet"
+    try:
+        docker("volume", "create", "--label", f"{LABEL}={run_id}", volume, log=log)
+        docker("run", "--rm", "--name", f"{run_id}-copy", "--label", f"{LABEL}={run_id}", "-v", f"{volume}:/out",
+               SDK_IMAGE, "cp", "-a", "/usr/share/dotnet/.", "/out/", log=log)
+        args += ["-v", f"{volume}:/usr/share/dotnet:ro", "-e", "DOTNET_SYSTEM_GLOBALIZATION_INVARIANT=1",
+                 "-e", "PATH=/usr/share/dotnet:/usr/bin:/bin", OLD_GLIBC_IMAGE, "bash", "-c",
+                 f"set -eo pipefail; ldd --version | head -1; {COPY_SOURCE}; {script}"]
+        return docker(*args, check=False, log=log).returncode
+    finally:
+        docker("volume", "rm", volume, check=False, log=log)
 
 
 def build_plugin(run_id: str, repo: Path, scratch: Path, log: Path) -> Path:

@@ -10,6 +10,7 @@ The helper has two tiers. Report them separately, because neither proves the oth
 | Tier | Command | Proves | Does not prove |
 | --- | --- | --- | --- |
 | Unit | `verify.py test` | Authorization, version resolution, selection, exact bytes, and validators through the controller with Jellyfin's managers mocked, plus the fixture contract | That Jellyfin loads the plugin, authenticates the request, or applies its real library access rules |
+| Unit, old glibc | `verify.py test --old-glibc` | The same suite on Rocky Linux 8 (glibc 2.28, one release above .NET 10's 2.27 floor) on the host architecture, where glibc exports `__fxstat` but not `fstat` | Other architectures, or any later glibc |
 | Live | `verify.py run` | A real Jellyfin 12.0.0 server loads this build and answers `GET /Plugins/Edl/ByItem/{itemId}` for two signed-in users, a server API key, and no token | Anything the drive does not request |
 
 Run every command from the repository root. Paths below are relative to it.
@@ -27,10 +28,11 @@ Exit codes are 0 for pass, 1 for fail, 2 for a missing prerequisite, and 64 for 
 - `python3` 3.9 or newer and `git`.
 - Network access for NuGet restore inside the SDK container on every run, and for the first pull of the pinned images.
 
-The helper names two images in `scripts/instance.py`. Only Jellyfin is pinned by digest.
+The helper names three images in `scripts/instance.py`. Only Jellyfin is pinned by digest.
 
 - `mcr.microsoft.com/dotnet/sdk:10.0` builds and tests the net10.0 projects. The `10.0` tag moves when Microsoft publishes a new SDK, so each run records the resolved image ID in `run.json` under `images`.
 - `jellyfin/jellyfin@sha256:baba630419915985442f315f08b0cf46d9f4c8a0cc4bd38e94a6d35751dd5ef5`, published as `jellyfin/jellyfin:12.0.20260908-012347`. It reports server version 12.0.0, which matches the `Jellyfin.Controller` 12.0.0 package. Doctor fails on any other version.
+- `rockylinux/rockylinux:8.10`, only for `test --old-glibc`. The SDK image's `/usr/share/dotnet` is copied into a run-labelled volume, mounted read-only in Rocky, and removed after the run. Globalization runs invariant because Rocky has no ICU.
 
 ## Launch
 
