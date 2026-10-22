@@ -1,19 +1,14 @@
 using System.Runtime.Versioning;
-using System.Text;
-using Jellyfin.Plugin.Edl.Api;
+using Jellyfin.Plugin.Edl.Models;
 using Jellyfin.Plugin.Edl.Services;
-using MediaBrowser.Model.IO;
-using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.Logging.Abstractions;
-using Moq;
 using Xunit.Abstractions;
 
 namespace Jellyfin.Plugin.Edl.Tests.Contract;
 
 /// <summary>
-/// Materializes the 19 MU-01 selection cases as planned inputs and records what
-/// the current legacy selector does with each EDL case. The contract outcomes
-/// are not implemented here; MU-09 and MU-12 own them.
+/// Materializes the 19 MU-01 selection cases and checks every EDL case against its contract
+/// outcome, both from the selector and as the HTTP response. The five MCF cases belong to MU-12.
 /// </summary>
 [UnsupportedOSPlatform("windows")]
 public sealed class SelectionCaseTests
@@ -80,50 +75,36 @@ public sealed class SelectionCaseTests
 
     [Theory]
     [MemberData(nameof(EdlCases))]
-    public async Task Current_plugin_serves_only_the_adjacent_legacy_sidecar(string name)
+    public async Task Edl_case_yields_its_contract_outcome(string name)
     {
         SelectionCase selectionCase = ExportLayoutFixture.Case(name);
         using var directory = new TempDirectory();
         string mediaPath = SelectionCaseMaterializer.Materialize(selectionCase, directory.Path);
+        Guid userId = ExportLayoutFixture.UserId(selectionCase.Principal);
+        Guid itemId = Guid.NewGuid();
 
-        IActionResult result = await ServeLegacyAsync(mediaPath);
+        ExportSelection selection = await new ExportSelector(NullLogger<ExportSelector>.Instance).SelectAsync(
+            new AuthorizedMedia(userId, itemId, itemId, mediaPath), new EdlExportFormat(new EdlParser()), CancellationToken.None);
+        var plugin = new PluginHarness();
+        var user = PluginHarness.NewUser(userId);
+        PluginResponse response = await plugin.GetAsync(user, plugin.AddVideo(new[] { user }, PluginHarness.Source(itemId, mediaPath)));
 
-        string legacyPath = Path.GetFileNameWithoutExtension(selectionCase.Media) + ".edl";
-        SelectionEntry? legacy = selectionCase.Entries.SingleOrDefault(e => e.Path == legacyPath);
-        if (legacy is null)
+        Assert.Equal(selectionCase.Expect.Outcome, selection.Outcome);
+        Assert.Equal(StatusFor(selectionCase.Expect.Outcome), response.Status);
+        if (selectionCase.Expect.Payload is { } payload)
         {
-            Assert.IsType<NotFoundResult>(result);
-        }
-        else if (ExportLayoutFixture.Manifest.Payloads[legacy.Payload!].Valid)
-        {
-            var content = Assert.IsType<ContentResult>(result);
-            Assert.Equal(Encoding.UTF8.GetString(ExportLayoutFixture.PayloadBytes(legacy.Payload!)), content.Content);
-        }
-        else
-        {
-            Assert.IsType<UnprocessableEntityObjectResult>(result);
+            Assert.Equal(ExportLayoutFixture.PayloadBytes(payload), Assert.IsType<ExportSelection.Found>(selection).Content);
+            Assert.Equal(ExportLayoutFixture.PayloadBytes(payload), response.Body);
         }
 
-        _output.WriteLine($"{name}: legacy selector {StatusOf(result)}, planned contract {selectionCase.Expect.Outcome}");
+        _output.WriteLine($"{name}: {selection.Outcome}, HTTP {response.Status}");
     }
 
-    private static Task<IActionResult> ServeLegacyAsync(string mediaPath)
+    private static int StatusFor(string outcome) => outcome switch
     {
-        var resolver = new Mock<ILibraryItemResolver>();
-        resolver.Setup(x => x.Resolve(It.IsAny<Guid>())).Returns(new ResolvedLibraryItem(true, true, mediaPath));
-        // Jellyfin's ManagedFileSystem is not in the reference packages; it answers FileExists with File.Exists.
-        var fileSystem = new Mock<IFileSystem>();
-        fileSystem.Setup(x => x.FileExists(It.IsAny<string>())).Returns<string>(File.Exists);
-        var lookup = new EdlLookupService(resolver.Object, fileSystem.Object, NullLogger<EdlLookupService>.Instance);
-        var controller = new EdlController(lookup, new EdlParser(), NullLogger<EdlController>.Instance);
-        return controller.GetByItemId(Guid.NewGuid(), CancellationToken.None);
-    }
-
-    private static int StatusOf(IActionResult result) => result switch
-    {
-        ContentResult => 200,
-        NotFoundResult => 404,
-        UnprocessableEntityObjectResult => 422,
-        _ => 0,
+        "personal" or "default" => 200,
+        "personal_invalid" or "default_invalid" => 422,
+        "personal_unreadable" or "default_unreadable" => 500,
+        _ => 404,
     };
 }

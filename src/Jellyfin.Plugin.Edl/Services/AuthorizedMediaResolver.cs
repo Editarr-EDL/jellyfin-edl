@@ -1,0 +1,52 @@
+using Jellyfin.Database.Implementations.Entities;
+using Jellyfin.Plugin.Edl.Models;
+using MediaBrowser.Controller.Entities;
+using MediaBrowser.Controller.Library;
+using MediaBrowser.Model.Dto;
+using MediaBrowser.Model.MediaInfo;
+
+namespace Jellyfin.Plugin.Edl.Services;
+
+/// <summary>
+/// Resolves a requested item and version to a local media path through Jellyfin's own access rules for one user.
+/// </summary>
+public sealed class AuthorizedMediaResolver
+{
+    private readonly ILibraryManager _libraryManager;
+    private readonly IMediaSourceManager _mediaSourceManager;
+
+    /// <summary>Initializes a new instance of the <see cref="AuthorizedMediaResolver"/> class.</summary>
+    /// <param name="libraryManager">Jellyfin's library manager.</param>
+    /// <param name="mediaSourceManager">Jellyfin's media source manager.</param>
+    public AuthorizedMediaResolver(ILibraryManager libraryManager, IMediaSourceManager mediaSourceManager)
+    {
+        _libraryManager = libraryManager;
+        _mediaSourceManager = mediaSourceManager;
+    }
+
+    /// <summary>
+    /// Returns the version the user may play, or null when the item is not a video visible to the user,
+    /// the version is not one of that item's media sources for the user, or the version has no local file.
+    /// </summary>
+    /// <param name="user">The authenticated Jellyfin user.</param>
+    /// <param name="itemId">The requested item.</param>
+    /// <param name="mediaSourceId">The requested version, or null for the item's own file.</param>
+    /// <returns>The authorized media, or null.</returns>
+    public AuthorizedMedia? Resolve(User user, Guid itemId, Guid? mediaSourceId)
+    {
+        if (_libraryManager.GetItemById<Video>(itemId, user) is not Video video)
+        {
+            return null;
+        }
+
+        Guid versionId = mediaSourceId ?? itemId;
+        MediaSourceInfo? source = _mediaSourceManager.GetStaticMediaSources(video, false, user)
+            .FirstOrDefault(s => Guid.TryParse(s.Id, out Guid id) && id == versionId);
+        if (source is not { Protocol: MediaProtocol.File } || string.IsNullOrEmpty(source.Path) || !Path.IsPathRooted(source.Path))
+        {
+            return null;
+        }
+
+        return new AuthorizedMedia(user.Id, itemId, versionId, source.Path);
+    }
+}
