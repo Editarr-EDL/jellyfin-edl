@@ -45,3 +45,16 @@ def redact(evidence_dir: Path, secrets: list) -> dict:
         if path.is_file() and any(needle in path.read_bytes() for needle in needles):
             raise RuntimeError(f"secret survived redaction in {path.name}")
     return report
+
+
+def scrub(value: object, secrets: list) -> object:
+    """Return a copy of JSON-shaped value with every secret in its strings replaced."""
+    if isinstance(value, dict):
+        return {key: scrub(item, secrets) for key, item in value.items()}
+    if isinstance(value, list):
+        return [scrub(item, secrets) for item in value]
+    if isinstance(value, str):
+        for secret in secrets:
+            if secret:
+                value = value.replace(secret, REDACTED.decode())
+    return value

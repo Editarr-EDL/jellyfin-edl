@@ -65,17 +65,32 @@ def new_scratch(run_id: str) -> Path:
     return scratch
 
 
-def check_owned_scratch(scratch: Path, run_id: str) -> None:
-    """Raise unless scratch is a real directory in the temp root that carries this run's marker.
+def scratch_identity(scratch: Path) -> dict:
+    """Return the device and inode that launch records so cleanup can recognize the directory it created."""
+    status = os.lstat(scratch)
+    return {"dev": status.st_dev, "inode": status.st_ino}
 
-    Uses lstat throughout, so a symlinked root or marker is refused without following it.
+
+def check_owned_scratch(scratch: Path, run_id: str, identity: dict | None) -> None:
+    """Raise unless scratch is the real temp directory this run created.
+
+    Uses lstat throughout, so a symlinked root or marker is refused without
+    following it. The device and inode must equal the identity recorded at
+    launch. The marker must name this run, or be missing from an empty
+    directory, which is what an interrupted final rmdir leaves behind.
     """
     if not stat.S_ISDIR(os.lstat(scratch).st_mode):
         raise RuntimeError("recorded scratch path is a symlink or not a directory")
     if not scratch.name.startswith(SCRATCH_PREFIX) or scratch.parent != Path(tempfile.gettempdir()).resolve():
         raise RuntimeError("recorded scratch path is not a run-owned temp directory")
+    if identity is None or scratch_identity(scratch) != identity:
+        raise RuntimeError("recorded scratch path is not the directory this run created")
     marker = scratch / SCRATCH_MARKER
-    if not os.path.lexists(marker) or not stat.S_ISREG(os.lstat(marker).st_mode) or marker.read_text() != run_id:
+    if not os.path.lexists(marker):
+        if any(scratch.iterdir()):
+            raise RuntimeError("recorded scratch directory has lost its marker but is not empty")
+        return
+    if not stat.S_ISREG(os.lstat(marker).st_mode) or marker.read_text() != run_id:
         raise RuntimeError("recorded scratch directory does not carry this run's marker")
 
 
@@ -176,7 +191,7 @@ def cleanup(run: dict, log: Path) -> dict:
             return "absent"
         if errors:
             return "kept until containers and volumes are removed"
-        check_owned_scratch(scratch, run_id)
+        check_owned_scratch(scratch, run_id, run.get("scratchIdentity"))
         for child in scratch.iterdir():
             if child.name == SCRATCH_MARKER:
                 continue
@@ -185,7 +200,7 @@ def cleanup(run: dict, log: Path) -> dict:
             else:
                 child.unlink()
         # The marker goes last so a retry after a partial removal can still prove ownership.
-        (scratch / SCRATCH_MARKER).unlink()
+        (scratch / SCRATCH_MARKER).unlink(missing_ok=True)
         scratch.rmdir()
         return "removed"
 

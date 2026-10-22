@@ -101,7 +101,8 @@ def launch(directory: Path, run: dict) -> None:
     manifest = library.load_manifest(FIXTURE)
     scratch = instance.new_scratch(run["runId"])
     run_id = run["runId"]
-    run.update({"scratch": str(scratch), "container": f"{run_id}-jellyfin", "port": None,
+    run.update({"scratch": str(scratch), "scratchIdentity": instance.scratch_identity(scratch),
+                "container": f"{run_id}-jellyfin", "port": None,
                 "volumes": [f"{run_id}-config", f"{run_id}-cache"], "image": instance.JELLYFIN_IMAGE,
                 "imageTag": instance.JELLYFIN_TAG, "stopped": False})
     save(directory, run)
@@ -221,7 +222,9 @@ def finish(directory: Path, run: dict) -> bool:
     Success needs a completed redaction and a clean cleanup, recorded as
     `redacted` and `stopped` in run.json. Scratch holds the only copy of the
     secrets, so logs are captured and redacted only while it exists, and
-    cleanup removes it only after redaction. A retry redoes what an
+    cleanup removes it only after redaction. The caller's run is scrubbed of
+    the secrets in place before anything is saved, so an error that echoed a
+    secret cannot be written back after redaction. A retry redoes what an
     interruption left unfinished; a repeat after success changes nothing.
     """
     if run.get("stopped") and run.get("redacted") and evidence.read_json(directory / "cleanup.json")["clean"]:
@@ -230,6 +233,7 @@ def finish(directory: Path, run: dict) -> bool:
     if not run.get("redacted") and run.get("scratch") and not have_secrets:
         raise RuntimeError("scratch secrets are gone before redaction completed; evidence kept for manual review")
     hidden = list(secrets_of(run).values()) if have_secrets else []
+    run.update(evidence.scrub(run, hidden))
     if run.get("container") and have_secrets:
         logs = instance.docker("logs", run["container"], check=False)
         if logs.returncode == 0:

@@ -74,7 +74,7 @@ The token lives only in `secrets.json` (mode 0600) in the run's scratch director
 
 Each run writes `artifacts/verify/<run-id>/`. The `artifacts/` directory is ignored by Git. Evidence files are ordinary files (mode 0644) and hold no secrets.
 
-- `run.json` holds the run ID, the plugin commit, the count of uncommitted paths, the image IDs, the container and volume names, the port, the scratch path, the plugin DLL hash, and the cleanup state `redacted` and `stopped`.
+- `run.json` holds the run ID, the plugin commit, the count of uncommitted paths, the image IDs, the container and volume names, the port, the scratch path and its device and inode (`scratchIdentity`), the plugin DLL hash, any `error`, and the cleanup state `redacted` and `stopped`.
 - `doctor.json` and `drive.json` hold each check and each request with its status, content type, body hash, and body for 200 responses.
 - `server-public.json`, `items.json`, and `library.json` record the server, the indexed item IDs, and the synthetic files.
 - `build.log`, `docker.log`, and `jellyfin.log` hold the build, every Docker command, and the server log.
@@ -93,7 +93,7 @@ python3 .github/skills/verify-jellyfin-edl/scripts/verify.py cleanup artifacts/v
 
 Cleanup captures the server log, redacts the evidence, and then removes only containers and volumes labelled `jfedl.run=<run-id>` and the recorded scratch directory. It never removes evidence.
 
-The scratch `secrets.json` (mode 0600) is the only copy of the password and token, and redaction needs it. Cleanup therefore redacts first. It keeps scratch until the containers and volumes are gone, so a retry can still capture and redact the server log. It removes scratch only when the path is a real directory, not a symlink, directly under the system temp directory, and it contains a `.jfedl-run` marker naming this run. It removes the marker last and never follows a symlink inside scratch.
+The scratch `secrets.json` (mode 0600) is the only copy of the password and token, and redaction needs it. Cleanup therefore redacts first. Before it saves anything, it also replaces the secrets in the run record it holds in memory, so an `error` that echoed a secret keeps its text with `[REDACTED]` and is never written back after redaction. It keeps scratch until the containers and volumes are gone, so a retry can still capture and redact the server log. It removes scratch only when the path is a real directory, not a symlink, directly under the system temp directory, with the device and inode recorded at launch. The directory must also contain a `.jfedl-run` marker naming this run, or be empty with no marker, which is what an interrupted final `rmdir` leaves. It removes the marker last and never follows a symlink inside scratch.
 
 Cleanup succeeds only when redaction completed and every resource is gone. Any other outcome exits 1, keeps the evidence, and reports the errors in `cleanup.json` or on the console. Rerun `verify.py cleanup` after fixing the cause; it repeats only the unfinished work. Repeating it after a success changes nothing. If scratch disappears before redaction finished, cleanup refuses to report success, because it can no longer prove the evidence is clean. `verify.py run --inject-failure` fails after the drive and proves that cleanup still runs and the evidence survives. Never stop containers by name pattern or prune Docker.
 
