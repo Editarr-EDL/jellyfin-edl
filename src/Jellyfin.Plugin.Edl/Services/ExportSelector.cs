@@ -23,6 +23,9 @@ public sealed class ExportSelector
         _logger = logger;
     }
 
+    /// <summary>Gets a test seam that runs after the selected entry is checked and before its bytes are read.</summary>
+    internal Action<string>? BeforeRead { get; init; }
+
     /// <summary>Selects and reads the export for <paramref name="media"/> in <paramref name="format"/>.</summary>
     /// <param name="media">The version the requester is authorized to read exports for.</param>
     /// <param name="format">The export format.</param>
@@ -74,6 +77,7 @@ public sealed class ExportSelector
         byte[] content;
         try
         {
+            BeforeRead?.Invoke(path);
             content = await File.ReadAllBytesAsync(path, cancellationToken).ConfigureAwait(false);
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)

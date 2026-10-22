@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Runtime.Versioning;
 using Jellyfin.Plugin.Edl.Models;
 using Jellyfin.Plugin.Edl.Services;
@@ -7,9 +8,9 @@ namespace Jellyfin.Plugin.Edl.Tests.Contract;
 
 /// <summary>
 /// Selection rules of editarr-export-layout-1 that the frozen v1 manifest has no case for: symbolic links,
-/// linked export folders, an unsearchable personal directory, an unreadable default, refused media names,
-/// and a server API key. Each case pairs the selector outcome with the HTTP status. These cases are local
-/// to the plugin and do not change v1.
+/// named pipes, a link swapped in after the check, linked export folders, an unsearchable personal directory,
+/// an unreadable default, refused media names, and a server API key. Each case pairs the selector outcome
+/// with the HTTP status. These cases are local to the plugin and do not change v1.
 /// </summary>
 [UnsupportedOSPlatform("windows")]
 public sealed class SupplementalSelectionTests : IDisposable
@@ -84,6 +85,53 @@ public sealed class SupplementalSelectionTests : IDisposable
     }
 
     [Fact]
+    public async Task Named_pipe_at_the_personal_path_is_invalid_without_a_writer_and_does_not_fall_back()
+    {
+        Write(Default, "edl-default");
+        await MakeNamedPipeAsync(Personal);
+
+        await WithoutBlockingAsync(() => AssertOutcomeAsync("Movie.mkv", "personal_invalid", 422));
+    }
+
+    [Fact]
+    public async Task Named_pipe_at_the_default_path_is_invalid_when_the_personal_file_is_absent()
+    {
+        await MakeNamedPipeAsync(Default);
+
+        await WithoutBlockingAsync(async () =>
+        {
+            await AssertOutcomeAsync("Movie.mkv", "default_invalid", 422);
+            await AssertOutcomeAsync("Movie.mkv", "default_invalid", 422, serverKey: true);
+        });
+    }
+
+    [Fact]
+    public async Task Final_entry_swapped_for_a_symlink_after_the_check_serves_the_checked_file()
+    {
+        Write(Personal, "edl-personal-a");
+        Write("elsewhere/other-user.edl", "edl-personal-b");
+        string personal = Path.Combine(_directory.Path, Personal);
+        var selector = new ExportSelector(NullLogger<ExportSelector>.Instance)
+        {
+            BeforeRead = path =>
+            {
+                string staging = path + ".swap";
+                File.CreateSymbolicLink(staging, Path.Combine(_directory.Path, "elsewhere/other-user.edl"));
+                File.Move(staging, path, overwrite: true);
+            },
+        };
+        string mediaPath = Path.Combine(_directory.Path, "Movie.mkv");
+        Guid itemId = Guid.NewGuid();
+
+        ExportSelection selection = await selector.SelectAsync(
+            new AuthorizedMedia(new Requester.Account(UserId), itemId, itemId, mediaPath), new EdlExportFormat(new EdlParser()), CancellationToken.None);
+
+        Assert.NotNull(new FileInfo(personal).LinkTarget);
+        Assert.Equal("personal", selection.Outcome);
+        Assert.Equal(ExportLayoutFixture.PayloadBytes("edl-personal-a"), Assert.IsType<ExportSelection.Found>(selection).Content);
+    }
+
+    [Fact]
     public async Task Server_key_gets_the_default_whatever_blocks_the_personal_path()
     {
         Write("elsewhere/personal.edl", "edl-personal-a");
@@ -147,6 +195,26 @@ public sealed class SupplementalSelectionTests : IDisposable
 
         Assert.Equal(outcome, selection.Outcome);
         Assert.Equal(status, response.Status);
+    }
+
+    private static async Task WithoutBlockingAsync(Func<Task> assertion)
+    {
+        Task pending = Task.Run(assertion);
+        if (await Task.WhenAny(pending, Task.Delay(TimeSpan.FromSeconds(5))) != pending)
+        {
+            Assert.Fail("Selection blocked on a named pipe waiting for a writer.");
+        }
+
+        await pending;
+    }
+
+    private async Task MakeNamedPipeAsync(string relativePath)
+    {
+        string path = Path.Combine(_directory.Path, relativePath);
+        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+        using Process process = Process.Start(new ProcessStartInfo("mkfifo") { ArgumentList = { path } })!;
+        await process.WaitForExitAsync();
+        Assert.Equal(0, process.ExitCode);
     }
 
     private void Write(string relativePath, string payloadId)
