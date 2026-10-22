@@ -185,10 +185,16 @@ docker compose down
 
 - Only EDL is served. MCF selection follows the same layout and is not implemented yet.
 - Filesystem path details are logged server-side but not returned in API errors.
-- On Linux x64 and arm64 and on macOS, the plugin opens an export file without following a final
-  symbolic link and without waiting on a named pipe, checks that the open file is a regular file, and
-  reads that same open file. A link, directory, or named pipe at the export path returns 422, even when
-  it is swapped in during a request. An entry the server cannot open returns 500. On Linux this calls
-  the `fstat` symbol, which glibc exports from 2.33 and musl always exports.
-- On Windows and other platforms, the plugin checks the entry and then opens it by path, so a symbolic
-  link swapped in between is followed once. That path is untested.
+- On Linux x64 and arm64 (glibc 2.27 or later, or musl) and on macOS x64 and arm64, the plugin opens an
+  export file without following a final symbolic link and without waiting on a named pipe, checks that
+  the open file is a regular file, and reads that same open file. A link, directory, or named pipe at
+  the export path returns 422, even when it is swapped in during a request. An entry the server cannot
+  open returns 500. On Linux the check calls `fstat`, or `__fxstat` on glibc before 2.33, which does
+  not export `fstat`.
+- Every other platform checks the entry and then opens it by path: Windows on any architecture, Linux
+  on Arm32, ppc64le, or s390x, FreeBSD, and any other system .NET runs on. Someone with write access
+  inside the library folder can replace an export file with a symbolic link between the check and the
+  open, and the plugin then serves the link's target, which can be any file the server can read, such
+  as another user's personal EDL. On the Unix platforms in this list, a named pipe at an export path
+  also holds the request open until a writer connects. Windows keeps this behavior by decision; none
+  of these platforms is tested.
