@@ -10,7 +10,7 @@ using Microsoft.Net.Http.Headers;
 
 namespace Jellyfin.Plugin.Edl.Api;
 
-/// <summary>Serves a library video's export: the signed-in user's personal or default file, or the default to a server API key.</summary>
+/// <summary>Serves a library video's EDL or MCF export: the signed-in user's personal or default file, or the default to a server API key.</summary>
 [ApiController]
 [Authorize]
 [Route("Plugins/Edl")]
@@ -20,22 +20,26 @@ public sealed class EdlController : ControllerBase
     private readonly AuthorizedMediaResolver _mediaResolver;
     private readonly ExportSelector _selector;
     private readonly EdlExportFormat _edl;
+    private readonly McfExportFormat _mcf;
 
     /// <summary>Initializes a new instance of the <see cref="EdlController"/> class.</summary>
     /// <param name="authorizationContext">Jellyfin's request authorization context.</param>
     /// <param name="mediaResolver">Resolves items and versions for the requester.</param>
     /// <param name="selector">Selects the personal or default export.</param>
     /// <param name="edl">The EDL format.</param>
+    /// <param name="mcf">The MCF format.</param>
     public EdlController(
         IAuthorizationContext authorizationContext,
         AuthorizedMediaResolver mediaResolver,
         ExportSelector selector,
-        EdlExportFormat edl)
+        EdlExportFormat edl,
+        McfExportFormat mcf)
     {
         _authorizationContext = authorizationContext;
         _mediaResolver = mediaResolver;
         _selector = selector;
         _edl = edl;
+        _mcf = mcf;
     }
 
     /// <summary>Gets the EDL the signed-in user should play for an item, or the item's default EDL for a server API key.</summary>
@@ -53,6 +57,22 @@ public sealed class EdlController : ControllerBase
     [ProducesResponseType(StatusCodes.Status500InternalServerError)]
     public Task<IActionResult> GetByItemId(Guid itemId, [FromQuery] Guid? mediaSourceId, CancellationToken cancellationToken)
         => ServeAsync(itemId, mediaSourceId, _edl, cancellationToken);
+
+    /// <summary>Gets the MCF the signed-in user should play for an item, or the item's default MCF for a server API key.</summary>
+    /// <param name="itemId">The library item.</param>
+    /// <param name="mediaSourceId">The item's media source (version); the item's own file when omitted.</param>
+    /// <param name="cancellationToken">The cancellation token.</param>
+    /// <returns>The exact file bytes, or the reason none is served.</returns>
+    [HttpGet("Mcf/ByItem/{itemId:guid}")]
+    [Produces("text/vtt", "application/json")]
+    [ProducesResponseType(StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status304NotModified)]
+    [ProducesResponseType(StatusCodes.Status403Forbidden)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    [ProducesResponseType(StatusCodes.Status422UnprocessableEntity)]
+    [ProducesResponseType(StatusCodes.Status500InternalServerError)]
+    public Task<IActionResult> GetMcfByItemId(Guid itemId, [FromQuery] Guid? mediaSourceId, CancellationToken cancellationToken)
+        => ServeAsync(itemId, mediaSourceId, _mcf, cancellationToken);
 
     /// <summary>
     /// Authorizes the requester, item, and version, then selects and serves one format's export.

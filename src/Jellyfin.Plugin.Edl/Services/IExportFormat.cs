@@ -3,8 +3,7 @@ using Jellyfin.Plugin.Edl.Models;
 namespace Jellyfin.Plugin.Edl.Services;
 
 /// <summary>
-/// One export format that <see cref="ExportSelector"/> can select and the controller can serve.
-/// EDL is the only format today; MCF adds a second implementation.
+/// One export format that <see cref="ExportSelector"/> can select and the controller can serve: EDL or MCF.
 /// </summary>
 public interface IExportFormat
 {
