@@ -93,8 +93,12 @@ def run(clients: dict, items: dict, cases: list[dict], clock=time.monotonic, pau
             headers["If-None-Match"] = results[case["ifNoneMatch"]]["etag"]
 
         def ask(any_digest=False):
-            response = clients[case["principal"]].request(
-                "GET", path, authenticated=case["principal"] != "anonymous", headers=dict(headers))
+            try:
+                response = clients[case["principal"]].request(
+                    "GET", path, authenticated=case["principal"] != "anonymous", headers=dict(headers))
+            except OSError as error:
+                return {"status": None, "error": f"{type(error).__name__}: {error}", "etag": None,
+                        "bodySha256": None, "ok": False}
             if any_digest:
                 return judge({**case, "sha256": [hashlib.sha256(response.body).hexdigest()]}, response)
             return judge(case, response)
@@ -118,7 +122,7 @@ def run(clients: dict, items: dict, cases: list[dict], clock=time.monotonic, pau
         result = {"check": case["name"], "case": case, **last, "ok": ok}
         if repeating:
             result["answers"] = len(answers)
-            result["digestsSeen"] = sorted({answer["bodySha256"] for answer in answers})
-            result["statusesSeen"] = sorted({answer["status"] for answer in answers})
+            result["digestsSeen"] = sorted({answer["bodySha256"] for answer in answers if answer["bodySha256"]})
+            result["statusesSeen"] = sorted({answer["status"] for answer in answers if answer["status"]})
         results[case["name"]] = result
     return list(results.values())

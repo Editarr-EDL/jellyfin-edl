@@ -5,7 +5,8 @@ Usage:
   verify.py test [--filter EXPR] [--old-glibc]
                                      dotnet test in a disposable SDK container, or with that
                                      SDK in Rocky Linux 8 (glibc 2.28) for --old-glibc
-  verify.py run [--inject-failure]   launch, doctor, drive, then always clean up
+  verify.py run [--inject-failure] [--port N]
+                                     launch, doctor, drive, then always clean up
   verify.py launch [--interop DIR] [--port N]
                                      start an instance and print its evidence dir; --interop
                                      serves the caller's media tree DIR instead of the fixture
@@ -317,6 +318,9 @@ def finish(directory: Path, run: dict) -> bool:
 
 def command_run(argv: list) -> int:
     directory, run = new_run("jellyfin-http")
+    if "--port" in argv:
+        run["hostPort"] = int(argv[argv.index("--port") + 1])
+    run["labels"] = instance.EXTRA_LABELS
     save(directory, run)
     code = 1
     try:

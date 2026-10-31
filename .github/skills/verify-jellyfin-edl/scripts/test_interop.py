@@ -130,6 +130,15 @@ class RunTests(unittest.TestCase):
         [result] = matrix.run({"admin": client}, ITEMS, [case(principal="admin", untilChanged=True)], pause=lambda _: None)
         self.assertFalse(result["ok"])
 
+    def test_a_connection_failure_is_a_recorded_gap_not_a_crash(self):
+        class Refusing:
+            def request(self, *args, **kwargs):
+                raise ConnectionResetError("reset by peer")
+
+        [result] = matrix.run({"admin": Refusing()}, ITEMS, [case(principal="admin", untilChanged=True)], pause=lambda _: None)
+        self.assertFalse(result["ok"])
+        self.assertIn("ConnectionResetError", result["error"])
+
 
 class InteropOptionTests(unittest.TestCase):
     def test_the_tree_must_be_an_absolute_directory_without_links(self):
