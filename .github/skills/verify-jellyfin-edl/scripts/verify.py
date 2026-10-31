@@ -6,10 +6,16 @@ Usage:
                                      dotnet test in a disposable SDK container, or with that
                                      SDK in Rocky Linux 8 (glibc 2.28) for --old-glibc
   verify.py run [--inject-failure]   launch, doctor, drive, then always clean up
-  verify.py launch                   start an instance and print its evidence dir
+  verify.py launch [--interop DIR] [--port N]
+                                     start an instance and print its evidence dir; --interop
+                                     serves the caller's media tree DIR instead of the fixture
   verify.py doctor EVIDENCE_DIR      read-only health check of a launched instance
   verify.py drive EVIDENCE_DIR       request every synthetic item through both export routes
+  verify.py matrix EVIDENCE_DIR CASES_JSON LABEL
+                                     request the caller's cases and write matrix-LABEL.json
   verify.py cleanup EVIDENCE_DIR     remove run-owned resources, keep evidence
+
+Every command accepts --label KEY=VALUE (repeatable) to add a Docker label to all it creates.
 
 Exit codes: 0 pass, 1 fail, 2 blocked prerequisite, 64 usage.
 """
@@ -33,6 +39,7 @@ import instance  # noqa: E402
 import jellyfin_api  # noqa: E402
 import journey  # noqa: E402
 import library  # noqa: E402
+import matrix  # noqa: E402
 
 REPO = Path(__file__).resolve().parents[4]
 FIXTURE = REPO / "tests" / "fixtures" / "export-layout-v1"
@@ -101,6 +108,7 @@ def command_test(argv: list) -> int:
 
 
 def launch(directory: Path, run: dict) -> None:
+    """Start a labelled server with this build and two users; lay out the fixture or index an interop tree."""
     log = directory / "docker.log"
     run["images"] = instance.preflight([instance.SDK_IMAGE, instance.JELLYFIN_IMAGE])
     manifest = library.load_manifest(FIXTURE)
@@ -113,7 +121,7 @@ def launch(directory: Path, run: dict) -> None:
     save(directory, run)
     staged = instance.build_plugin(run_id, REPO, scratch, directory / "build.log")
     run["pluginSha256"] = sha256_file(staged / "Jellyfin.Plugin.Edl.dll")
-    video = instance.generate_video(run_id, scratch, log)
+    video = None if run.get("interop") else instance.generate_video(run_id, scratch, log)
     (scratch / "media").mkdir()
     run["port"] = instance.start(run, log)
     save(directory, run)
@@ -134,6 +142,8 @@ def launch(directory: Path, run: dict) -> None:
         evidence.private_file(scratch / "secrets.json", hidden)
     hidden["apiKey"] = jellyfin_api.create_api_key(client, "jfedl-verify")
     evidence.private_file(scratch / "secrets.json", hidden)
+    if run.get("interop"):
+        return index_interop(directory, client, Path(run["interop"]), users, admin_id)
     export_ids = {manifest["principals"][name]["exportId"]: users[name] for name in journey.USERS}
     files = library.build(manifest, FIXTURE, scratch / "media", video, export_ids)
     evidence.write_json(directory / "library.json", {"videoSha256": sha256_file(video), "files": files})
@@ -148,6 +158,50 @@ def launch(directory: Path, run: dict) -> None:
              for path in library.unreadable_paths(manifest, export_ids)]
     evidence.write_json(directory / "items.json", {"adminUserId": admin_id, "users": users, "items": items,
                                                   "serverReadsMode000": all(reads)})
+
+
+def index_interop(directory: Path, client: jellyfin_api.Jellyfin, tree: Path, users: dict, admin_id: str) -> None:
+    """Add one movie library per top-level folder of tree; userB may not see `Restricted`."""
+    folders = sorted(child.name for child in tree.iterdir() if child.is_dir())
+    for name in folders:
+        jellyfin_api.add_movie_library(client, name, str(tree / name))
+    if "Restricted" in folders:
+        ids = jellyfin_api.library_ids(client)
+        jellyfin_api.limit_libraries(client, users["userB"], [ids[name] for name in folders if name != "Restricted"])
+    paths = {str(path) for path in tree.rglob("*.mkv")}
+    if not paths:
+        raise RuntimeError("the interop tree holds no .mkv media")
+    items = jellyfin_api.wait_for_movies(client, paths, 300)
+    evidence.write_json(directory / "library.json", {"interop": str(tree), "libraries": folders, "media": sorted(paths)})
+    evidence.write_json(directory / "items.json", {"adminUserId": admin_id, "users": users, "items": items,
+                                                  "serverReadsMode000": None})
+
+
+def interop_tree(value: str) -> Path:
+    """An existing absolute directory without symbolic links, so container and host paths agree."""
+    tree = Path(value)
+    if not tree.is_absolute() or not tree.is_dir() or str(tree.resolve()) != value:
+        raise ValueError(f"--interop needs an existing absolute directory with no symbolic links: {value}")
+    return tree
+
+
+def command_matrix(directory: Path, cases_file: Path, label: str) -> bool:
+    """Run caller cases against a launched instance and write matrix-LABEL.json."""
+    if not label.replace("-", "").isalnum() or not label.islower():
+        raise ValueError("LABEL must be lowercase letters, digits, and hyphens")
+    run = evidence.read_json(directory / "run.json")
+    state = evidence.read_json(directory / "items.json")
+    cases = matrix.load_cases(evidence.read_json(cases_file), state["items"])
+    hidden = secrets_of(run)
+    clients = {"anonymous": client_for(run), "apiKey": client_for(run, hidden["apiKey"]),
+               **{name: client_for(run, hidden[f"{name}Token"]) for name in journey.USERS}}
+    checks = matrix.run(clients, state["items"], cases)
+    ok = all(check["ok"] for check in checks)
+    evidence.write_json(directory / f"matrix-{label}.json", {"ok": ok, "users": state["users"], "checks": checks})
+    failed = [check["check"] for check in checks if not check["ok"]]
+    print(f"matrix {label} {'ok' if ok else 'FAILED'}: {len(checks) - len(failed)}/{len(checks)} checks pass"
+          + (f"; failed: {failed}" if failed else ""))
+    return ok
 
 
 def doctor(directory: Path) -> bool:
@@ -292,12 +346,33 @@ def main(argv: list) -> int:
         print(__doc__)
         return 64
     command, rest = argv[0], argv[1:]
+    while "--label" in rest:
+        at = rest.index("--label")
+        value = rest[at + 1] if at + 1 < len(rest) else ""
+        if "=" not in value or value.startswith("="):
+            print(__doc__)
+            return 64
+        instance.EXTRA_LABELS.append(value)
+        del rest[at:at + 2]
     if command == "test":
         return command_test(rest)
     if command == "run":
         return command_run(rest)
     if command == "launch":
-        directory, run = new_run("jellyfin-http")
+        options = dict(zip(rest[::2], rest[1::2]))
+        if len(rest) % 2 or set(options) - {"--interop", "--port"}:
+            print(__doc__)
+            return 64
+        directory, run = new_run("jellyfin-interop" if "--interop" in options else "jellyfin-http")
+        try:
+            if "--interop" in options:
+                run["interop"] = str(interop_tree(options["--interop"]))
+            if "--port" in options:
+                run["hostPort"] = int(options["--port"])
+        except ValueError as error:
+            print(error)
+            return 64
+        run["labels"] = instance.EXTRA_LABELS
         save(directory, run)
         try:
             launch(directory, run)
@@ -308,6 +383,12 @@ def main(argv: list) -> int:
             return 2 if isinstance(error, instance.Blocked) else 1
         print(f"evidence: {directory}\nport: {run['port']}")
         return 0
+    if command == "matrix" and len(rest) == 3:
+        try:
+            return 0 if command_matrix(Path(rest[0]).resolve(), Path(rest[1]), rest[2]) else 1
+        except Exception as error:
+            print(f"matrix failed: {type(error).__name__}: {error}")
+            return 1
     if command in ("doctor", "drive", "cleanup") and len(rest) == 1:
         directory = Path(rest[0]).resolve()
         try:
