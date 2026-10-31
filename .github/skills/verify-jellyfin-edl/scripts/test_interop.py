@@ -49,6 +49,8 @@ class LoadCasesTests(unittest.TestCase):
             {"cases": [case(ifNoneMatch="later")]},
             {"cases": [case(until="0" * 64)]},
             {"cases": [case(extra=1)]},
+            {"cases": [case(untilChanged=False)]},
+            {"cases": [case(untilChanged=True, until=OWN_SHA)]},
         ]
         for document in bad:
             with self.assertRaises(ValueError, msg=document):
@@ -105,6 +107,27 @@ class RunTests(unittest.TestCase):
         stuck = FakeClient([jellyfin_api.Response(200, PRIVATE, OWN)])
         [result] = matrix.run({"userA": stuck}, ITEMS, [case(sha256=[OWN_SHA, new_sha], until=new_sha, seconds=5)],
                               clock=lambda: next(ticks), pause=lambda _: None)
+        self.assertFalse(result["ok"])
+
+    def test_until_changed_accepts_one_switch_and_rejects_a_gap(self):
+        new = b"5 6 3\n"
+        switch = FakeClient([jellyfin_api.Response(200, PRIVATE, OWN)] * 2 + [jellyfin_api.Response(200, PRIVATE, new)])
+        [result] = matrix.run({"admin": switch}, ITEMS, [case(principal="admin", untilChanged=True)], pause=lambda _: None)
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["bodySha256"], hashlib.sha256(new).hexdigest())
+        gap = FakeClient([jellyfin_api.Response(200, PRIVATE, OWN), jellyfin_api.Response(404, PRIVATE, b""),
+                          jellyfin_api.Response(200, PRIVATE, new)])
+        [result] = matrix.run({"admin": gap}, ITEMS, [case(principal="admin", untilChanged=True)], pause=lambda _: None)
+        self.assertFalse(result["ok"])
+        ticks = iter(range(1000))
+        stuck = FakeClient([jellyfin_api.Response(200, PRIVATE, OWN)])
+        [result] = matrix.run({"admin": stuck}, ITEMS, [case(principal="admin", untilChanged=True, seconds=3)],
+                              clock=lambda: next(ticks), pause=lambda _: None)
+        self.assertFalse(result["ok"])
+
+    def test_until_changed_must_start_on_an_accepted_digest(self):
+        client = FakeClient([jellyfin_api.Response(200, PRIVATE, b"other\n")])
+        [result] = matrix.run({"admin": client}, ITEMS, [case(principal="admin", untilChanged=True)], pause=lambda _: None)
         self.assertFalse(result["ok"])
 
 

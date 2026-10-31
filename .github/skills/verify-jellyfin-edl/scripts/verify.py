@@ -193,7 +193,7 @@ def command_matrix(directory: Path, cases_file: Path, label: str) -> bool:
     state = evidence.read_json(directory / "items.json")
     cases = matrix.load_cases(evidence.read_json(cases_file), state["items"])
     hidden = secrets_of(run)
-    clients = {"anonymous": client_for(run), "apiKey": client_for(run, hidden["apiKey"]),
+    clients = {"anonymous": client_for(run), "apiKey": client_for(run, hidden["apiKey"]), "admin": client_for(run, hidden["token"]),
                **{name: client_for(run, hidden[f"{name}Token"]) for name in journey.USERS}}
     checks = matrix.run(clients, state["items"], cases)
     ok = all(check["ok"] for check in checks)

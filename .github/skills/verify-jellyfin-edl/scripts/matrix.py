@@ -4,7 +4,7 @@ A case file is JSON `{"cases": [CASE, ...]}`. Each CASE names one request and it
 expected answer:
 
 - `name`: unique within the file.
-- `principal`: `userA`, `userB`, `apiKey`, or `anonymous`.
+- `principal`: `userA`, `userB`, `admin` (the server administrator), `apiKey`, or `anonymous`.
 - `format`: `edl` or `mcf`.
 - `media`: a media path the instance indexed; the request uses its item ID.
 - `version`: optional media path whose media source ID is sent as `mediaSourceId`.
@@ -13,6 +13,10 @@ expected answer:
 - `ifNoneMatch`: optional earlier case name whose `ETag` is sent as `If-None-Match`.
 - `until`: optional digest; the request repeats until the body has it or
   `seconds` (default 60) pass, and every answer must satisfy the case.
+- `untilChanged`: optional true; the request repeats while the body keeps the
+  first accepted digest, until another digest arrives or `seconds` pass. Every
+  answer, the last included, must be a 200 with the route's headers, so a gap
+  (404, error, or another file) between the two files fails the case.
 
 The expectations belong to the caller, typically Editarr's interoperability
 journey, which derives them from the bytes it published. This module requests
@@ -26,8 +30,9 @@ import time
 
 from journey import CONTENT_TYPES, PRIVATE, ROUTES
 
-PRINCIPALS = ("userA", "userB", "apiKey", "anonymous")
-FIELDS = {"name", "principal", "format", "media", "version", "status", "sha256", "ifNoneMatch", "until", "seconds"}
+PRINCIPALS = ("userA", "userB", "admin", "apiKey", "anonymous")
+FIELDS = {"name", "principal", "format", "media", "version", "status", "sha256", "ifNoneMatch", "until", "untilChanged",
+          "seconds"}
 
 
 def load_cases(document: dict, items: dict) -> list[dict]:
@@ -56,6 +61,8 @@ def load_cases(document: dict, items: dict) -> list[dict]:
             raise ValueError(f"{name}: ifNoneMatch must name an earlier case")
         if "until" in case and case["until"] not in case.get("sha256", []):
             raise ValueError(f"{name}: until must be one of its acceptable digests")
+        if case.get("untilChanged") not in (None, True) or (case.get("untilChanged") and "until" in case):
+            raise ValueError(f"{name}: untilChanged is true or absent, and excludes until")
         seen.add(name)
     return cases
 
@@ -85,21 +92,31 @@ def run(clients: dict, items: dict, cases: list[dict], clock=time.monotonic, pau
         if "ifNoneMatch" in case and results[case["ifNoneMatch"]]["etag"]:
             headers["If-None-Match"] = results[case["ifNoneMatch"]]["etag"]
 
-        def ask():
+        def ask(any_digest=False):
             response = clients[case["principal"]].request(
                 "GET", path, authenticated=case["principal"] != "anonymous", headers=dict(headers))
+            if any_digest:
+                return judge({**case, "sha256": [hashlib.sha256(response.body).hexdigest()]}, response)
             return judge(case, response)
 
         answers = [ask()]
-        if "until" in case:
+        repeating = "until" in case or case.get("untilChanged")
+        if repeating:
             deadline = clock() + case.get("seconds", 60)
-            while answers[-1]["bodySha256"] != case["until"] and answers[-1]["ok"] and clock() < deadline:
+            target = case.get("until")
+            first = answers[0]["bodySha256"]
+            while answers[-1]["ok"] and clock() < deadline and (
+                    answers[-1]["bodySha256"] != target if target else answers[-1]["bodySha256"] == first):
                 pause(0.05)
-                answers.append(ask())
+                answers.append(ask(any_digest=bool(case.get("untilChanged"))))
         last = answers[-1]
-        ok = all(answer["ok"] for answer in answers) and ("until" not in case or last["bodySha256"] == case["until"])
-        result = {"check": case["name"], "case": case, **last, "ok": ok}
+        ok = all(answer["ok"] for answer in answers)
         if "until" in case:
+            ok = ok and last["bodySha256"] == case["until"]
+        if case.get("untilChanged"):
+            ok = ok and last["bodySha256"] != answers[0]["bodySha256"]
+        result = {"check": case["name"], "case": case, **last, "ok": ok}
+        if repeating:
             result["answers"] = len(answers)
             result["digestsSeen"] = sorted({answer["bodySha256"] for answer in answers})
             result["statusesSeen"] = sorted({answer["status"] for answer in answers})

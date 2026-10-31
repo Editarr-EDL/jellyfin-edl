@@ -12,6 +12,7 @@ The helper has two tiers. Report them separately, because neither proves the oth
 | Unit | `verify.py test` | Authorization, version resolution, selection, exact bytes, and validators through the controller with Jellyfin's managers mocked, plus the fixture contract | That Jellyfin loads the plugin, authenticates the request, or applies its real library access rules |
 | Unit, old glibc | `verify.py test --old-glibc` | The same suite on Rocky Linux 8 (glibc 2.28, one release above .NET 10's 2.27 floor) on the host architecture, where glibc exports `__fxstat` but not `fstat` | Other architectures, or any later glibc |
 | Live | `verify.py run` | A real Jellyfin 12.0.0 server loads this build and answers `GET /Plugins/Edl/ByItem/{itemId}` and `GET /Plugins/Edl/Mcf/ByItem/{itemId}` for two signed-in users, a server API key, and no token | Anything the drive does not request |
+| Interop | `verify.py launch --interop DIR`, `verify.py matrix`, `verify.py cleanup` | The same server serves the files another program (Editarr's `auth --plugin-interop` journey) publishes into DIR, with that program's expected bytes per user, format, and version | Editarr behavior; the caller's journey owns that proof |
 
 Run every command from the repository root. Paths below are relative to it.
 
@@ -50,6 +51,21 @@ The helper names three images in `scripts/instance.py`. Only Jellyfin is pinned 
 10. Waits until all 23 media paths are media sources of indexed movies, then runs `cat` on each mode 000 fixture file inside the container and records whether the server can read them all as `serverReadsMode000`.
 
 Launch prints the evidence directory and the port.
+
+### Interop launch
+
+`verify.py launch --interop DIR [--port N]` replaces steps 4 and 8 to 10. DIR must be an existing absolute directory with no symbolic link in its path. The container mounts it read-only at the same absolute path, so Jellyfin reports the paths the caller writes export files beside. Each top-level folder of DIR becomes a movie library, and `jfedl-userB` cannot see a folder named `Restricted`. Launch waits until every `.mkv` under DIR is indexed and writes `items.json` with media path, item ID, and media source ID. `--port N` publishes on `127.0.0.1:N` instead of a random port. Cleanup never removes DIR; its owner does. `drive` does not apply to an interop instance.
+
+`--label KEY=VALUE` (repeatable, every command) adds a Docker label to each container and volume beside `jfedl.run`. Cleanup still selects only by `jfedl.run`.
+
+### Matrix
+
+```bash
+python3 .github/skills/verify-jellyfin-edl/scripts/verify.py matrix artifacts/verify/<run-id> CASES.json LABEL
+scripts/run-edl-matrix.sh artifacts/verify/<run-id> CASES.json LABEL
+```
+
+`scripts/matrix.py` documents the case format: name, principal (`userA`, `userB`, `admin`, `apiKey`, `anonymous`), format, media path, optional `version` media path for `mediaSourceId`, expected status, acceptable SHA-256 set for a 200, optional `ifNoneMatch` naming an earlier case, and optional `until` or `untilChanged` repetition. A repeating case fails on any answer that is not a 200 with the route's headers, so it proves there was no gap while a file was replaced. The caller supplies every expectation; the matrix requests, compares, and writes `matrix-LABEL.json`. Exit 0 means every case matched. Tokens come from scratch `secrets.json` and never reach argv or evidence.
 
 ## Doctor
 
@@ -94,6 +110,7 @@ Each run writes `artifacts/verify/<run-id>/`. The `artifacts/` directory is igno
 - `build.log`, `docker.log`, and `jellyfin.log` hold the build, every Docker command, and the server log.
 - `cleanup.json` lists each cleanup step, its errors, and any leftover containers, volumes, or scratch directory.
 - `redaction.json` reports how many secrets were scanned and replaced. The helper fails if a secret survives.
+- `matrix-LABEL.json` holds each matrix case, its last answer, and for repeating cases the answer count and every digest and status seen. A caller may add `counterpart.json` naming its own commit and evidence.
 - When cleanup is retried, `cleanup.json` and `redaction.json` keep the replaced reports under `earlierAttempts`.
 - The unit tier writes `dotnet-test.log`, `dotnet-test.trx`, and the counters in `run.json`.
 
@@ -118,9 +135,10 @@ Cleanup succeeds only when redaction completed and every resource is gone. Any o
 - `scripts/jellyfin_api.py` owns HTTP: readiness, the startup wizard, sign-in, users, library access, the API key, the libraries, and item polling.
 - `scripts/library.py` lays out the fixture cases on disk for the live user IDs and holds the contract expectation.
 - `scripts/journey.py` is the two-user drive.
+- `scripts/matrix.py` validates and runs caller-supplied cases.
 - `scripts/evidence.py` writes evidence and redacts secrets.
 
-The repository's `scripts/` directory remains the manual harness. It needs a signed-in user's token in `JELLYFIN_USER_TOKEN` to reach personal files, because an API key reads only defaults. It writes build output into the checkout, targets the unpublished `jellyfin/jellyfin:12.0.0` Compose service, and passes the token on the `curl` command line.
+The repository's `scripts/` directory remains the manual harness. It needs a signed-in user's token in `JELLYFIN_USER_TOKEN` to reach personal files, because an API key reads only defaults. It writes build output into the checkout, targets the unpublished `jellyfin/jellyfin:12.0.0` Compose service, and passes the token on the `curl` command line. Given arguments, `scripts/run-edl-matrix.sh` instead runs `verify.py matrix`, which reads tokens from scratch and passes none on a command line.
 
 Test the helper itself without writing bytecode into the checkout.
 
