@@ -1,7 +1,8 @@
 """Docker lifecycle for one run-owned Jellyfin verification instance.
 
-Every container and volume carries the label jfedl.run=<run id>. Cleanup
-removes only resources whose label matches the recorded run ID.
+Every container and volume carries the label jfedl.run=<run id>, plus any
+`--label KEY=VALUE` the caller adds to EXTRA_LABELS. Cleanup removes only
+resources whose jfedl.run label matches the recorded run ID.
 """
 
 from __future__ import annotations
@@ -26,6 +27,13 @@ SCRATCH_MARKER = ".jfedl-run"
 LABEL = "jfedl.run"
 COPY_SOURCE = ("mkdir -p /tmp/work && tar -C /src --exclude=.git --exclude=bin --exclude=obj "
                "--exclude=artifacts --exclude=dev -cf - . | tar -C /tmp/work -xf - && cd /tmp/work")
+
+
+EXTRA_LABELS: list[str] = []
+
+
+def labels(run_id: str) -> list[str]:
+    return [arg for label in [f"{LABEL}={run_id}", *EXTRA_LABELS] for arg in ("--label", label)]
 
 
 class Blocked(Exception):
@@ -105,7 +113,7 @@ def sdk_run(run_id: str, repo: Path, mounts: list, script: str, log: Path, old_g
     With old_glibc, the SDK image's dotnet tree is copied into a run-labelled volume and the script
     runs in OLD_GLIBC_IMAGE (glibc 2.28) instead. The volume is removed afterwards.
     """
-    args = ["run", "--rm", "--name", f"{run_id}-sdk", "--label", f"{LABEL}={run_id}", "--user", user_flag(),
+    args = ["run", "--rm", "--name", f"{run_id}-sdk", *labels(run_id), "--user", user_flag(),
             "-e", "HOME=/tmp", "-e", "DOTNET_CLI_TELEMETRY_OPTOUT=1", "-e", "DOTNET_NOLOGO=1",
             "-v", f"{repo}:/src:ro"]
     for host, container in mounts:
@@ -114,8 +122,8 @@ def sdk_run(run_id: str, repo: Path, mounts: list, script: str, log: Path, old_g
         return docker(*args, SDK_IMAGE, "bash", "-c", f"set -eo pipefail; {COPY_SOURCE}; {script}", check=False, log=log).returncode
     volume = f"{run_id}-dotnet"
     try:
-        docker("volume", "create", "--label", f"{LABEL}={run_id}", volume, log=log)
-        docker("run", "--rm", "--name", f"{run_id}-copy", "--label", f"{LABEL}={run_id}", "-v", f"{volume}:/out",
+        docker("volume", "create", *labels(run_id), volume, log=log)
+        docker("run", "--rm", "--name", f"{run_id}-copy", *labels(run_id), "-v", f"{volume}:/out",
                SDK_IMAGE, "cp", "-a", "/usr/share/dotnet/.", "/out/", log=log)
         args += ["-v", f"{volume}:/usr/share/dotnet:ro", "-e", "DOTNET_SYSTEM_GLOBALIZATION_INVARIANT=1",
                  "-e", "PATH=/usr/share/dotnet:/usr/bin:/bin", OLD_GLIBC_IMAGE, "bash", "-c",
@@ -144,7 +152,7 @@ def generate_video(run_id: str, scratch: Path, log: Path) -> Path:
     """Encode a two-second synthetic test pattern with the Jellyfin image's own FFmpeg."""
     out = scratch / "video"
     out.mkdir()
-    docker("run", "--rm", "--name", f"{run_id}-ffmpeg", "--label", f"{LABEL}={run_id}", "--user", user_flag(),
+    docker("run", "--rm", "--name", f"{run_id}-ffmpeg", *labels(run_id), "--user", user_flag(),
            "--entrypoint", FFMPEG, "-v", f"{out}:/out", JELLYFIN_IMAGE, "-hide_banner", "-loglevel", "error",
            "-f", "lavfi", "-i", "testsrc=duration=2:size=320x180:rate=24", "-c:v", "libx264",
            "-pix_fmt", "yuv420p", "/out/synthetic.mkv", log=log)
@@ -152,13 +160,19 @@ def generate_video(run_id: str, scratch: Path, log: Path) -> Path:
 
 
 def start(run: dict, log: Path) -> int:
-    """Create labelled volumes and the container, copy the plugin in, start it, and return the host port."""
+    """Create labelled volumes and the container, copy the plugin in, start it, and return the host port.
+
+    An interop run mounts its caller's media tree read-only at the same absolute path,
+    so Jellyfin reports the paths the caller wrote its export files beside.
+    """
     run_id = run["runId"]
     for volume in run["volumes"]:
-        docker("volume", "create", "--label", f"{LABEL}={run_id}", volume, log=log)
-    docker("create", "--name", run["container"], "--label", f"{LABEL}={run_id}", "-p", "127.0.0.1::8096",
+        docker("volume", "create", *labels(run_id), volume, log=log)
+    media = run.get("interop") or f"{run['scratch']}/media"
+    mount = f"{media}:{media}:ro" if run.get("interop") else f"{media}:/media:ro"
+    docker("create", "--name", run["container"], *labels(run_id), "-p", f"127.0.0.1:{run.get('hostPort') or ''}:8096",
            "-v", f"{run['volumes'][0]}:/config", "-v", f"{run['volumes'][1]}:/cache",
-           "-v", f"{run['scratch']}/media:/media:ro", JELLYFIN_IMAGE, log=log)
+           "-v", mount, JELLYFIN_IMAGE, log=log)
     docker("cp", f"{run['scratch']}/config-seed/plugins", f"{run['container']}:/config/", log=log)
     docker("start", run["container"], log=log)
     binding = docker("port", run["container"], "8096/tcp", log=log).stdout.split()[0]
