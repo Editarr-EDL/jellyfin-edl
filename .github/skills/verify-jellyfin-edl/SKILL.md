@@ -56,7 +56,9 @@ Launch prints the evidence directory and the port.
 
 `verify.py launch --interop DIR [--port N]` replaces steps 4 and 8 to 10. DIR must be an existing absolute directory with no symbolic link in its path. The container mounts it read-only at the same absolute path, so Jellyfin reports the paths the caller writes export files beside. Each top-level folder of DIR becomes a movie library, and `jfedl-userB` cannot see a folder named `Restricted`. Launch waits until every `.mkv` under DIR is indexed and writes `items.json` with media path, item ID, and media source ID. `--port N` publishes on `127.0.0.1:N` instead of a random port. Cleanup never removes DIR; its owner does. `drive` does not apply to an interop instance.
 
-`--label KEY=VALUE` (repeatable, every command) adds a Docker label to each container and volume beside `jfedl.run`. Cleanup still selects only by `jfedl.run`.
+`--label KEY=VALUE` (repeatable, every command) adds a Docker label to each container and volume beside `jfedl.run`, and `run.json` records it. Cleanup still removes only by `jfedl.run`.
+
+Launch prints `evidence: DIR` before it builds or starts anything. A caller that kills a launch, or loses its evidence path, runs `verify.py cleanup-label KEY=VALUE` with a label only it used. That finishes every run recorded with the label, then fails if Docker still holds a container or volume carrying it.
 
 ### Matrix
 
@@ -110,7 +112,7 @@ Each run writes `artifacts/verify/<run-id>/`. The `artifacts/` directory is igno
 - `build.log`, `docker.log`, and `jellyfin.log` hold the build, every Docker command, and the server log.
 - `cleanup.json` lists each cleanup step, its errors, and any leftover containers, volumes, or scratch directory.
 - `redaction.json` reports how many secrets were scanned and replaced. The helper fails if a secret survives.
-- `matrix-LABEL.json` holds each matrix case, its last answer, and for repeating cases the answer count and every digest and status seen. A caller may add `counterpart.json` naming its own commit and evidence.
+- `matrix-LABEL.json` holds each matrix case, its last answer, and for repeating cases the answer count, every digest and status seen, and a `timeline` of answer runs with epoch-millisecond send and receipt times. A caller may add `counterpart.json` naming its own commit and evidence.
 - When cleanup is retried, `cleanup.json` and `redaction.json` keep the replaced reports under `earlierAttempts`.
 - The unit tier writes `dotnet-test.log`, `dotnet-test.trx`, and the counters in `run.json`.
 

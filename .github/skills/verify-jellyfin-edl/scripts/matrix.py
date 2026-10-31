@@ -18,6 +18,10 @@ expected answer:
   answer, the last included, must be a 200 with the route's headers, so a gap
   (404, error, or another file) between the two files fails the case.
 
+A repeating case also records `timeline`: each run of consecutive answers with one
+status and digest, with the epoch milliseconds at which its first and last request
+was sent and answered, so a caller can order the switch against its own events.
+
 The expectations belong to the caller, typically Editarr's interoperability
 journey, which derives them from the bytes it published. This module requests
 and compares; it never reads the export files itself.
@@ -82,7 +86,24 @@ def judge(case: dict, response) -> dict:
     return {**observed, "ok": ok}
 
 
-def run(clients: dict, items: dict, cases: list[dict], clock=time.monotonic, pause=time.sleep) -> list[dict]:
+def wall_ms() -> int:
+    return round(time.time() * 1000)
+
+
+def timeline(answers: list[dict]) -> list[dict]:
+    """Group consecutive answers with one status and digest, keeping each group's first and last times."""
+    spans = []
+    for answer in answers:
+        times = {"lastSentAt": answer["sentAt"], "lastReceivedAt": answer["receivedAt"]}
+        if spans and (spans[-1]["status"], spans[-1]["bodySha256"]) == (answer["status"], answer["bodySha256"]):
+            spans[-1].update(answers=spans[-1]["answers"] + 1, **times)
+        else:
+            spans.append({"status": answer["status"], "bodySha256": answer["bodySha256"], "answers": 1,
+                          "firstSentAt": answer["sentAt"], "firstReceivedAt": answer["receivedAt"], **times})
+    return spans
+
+
+def run(clients: dict, items: dict, cases: list[dict], clock=time.monotonic, pause=time.sleep, now=wall_ms) -> list[dict]:
     """Request every case in order and record each answer; a repeating case records them all."""
     results = {}
     for case in cases:
@@ -93,15 +114,15 @@ def run(clients: dict, items: dict, cases: list[dict], clock=time.monotonic, pau
             headers["If-None-Match"] = results[case["ifNoneMatch"]]["etag"]
 
         def ask(any_digest=False):
+            sent = now()
             try:
                 response = clients[case["principal"]].request(
                     "GET", path, authenticated=case["principal"] != "anonymous", headers=dict(headers))
             except OSError as error:
                 return {"status": None, "error": f"{type(error).__name__}: {error}", "etag": None,
-                        "bodySha256": None, "ok": False}
-            if any_digest:
-                return judge({**case, "sha256": [hashlib.sha256(response.body).hexdigest()]}, response)
-            return judge(case, response)
+                        "bodySha256": None, "ok": False, "sentAt": sent, "receivedAt": now()}
+            expected = {**case, "sha256": [hashlib.sha256(response.body).hexdigest()]} if any_digest else case
+            return {**judge(expected, response), "sentAt": sent, "receivedAt": now()}
 
         answers = [ask()]
         repeating = "until" in case or case.get("untilChanged")
@@ -124,5 +145,6 @@ def run(clients: dict, items: dict, cases: list[dict], clock=time.monotonic, pau
             result["answers"] = len(answers)
             result["digestsSeen"] = sorted({answer["bodySha256"] for answer in answers if answer["bodySha256"]})
             result["statusesSeen"] = sorted({answer["status"] for answer in answers if answer["status"]})
+            result["timeline"] = timeline(answers)
         results[case["name"]] = result
     return list(results.values())

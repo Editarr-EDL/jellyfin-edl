@@ -32,8 +32,13 @@ The journey calls this helper three ways and never reads its secrets into argv:
 2. `verify.py matrix <evidence> <cases> <phase>` once per phase. Editarr computes each
    expected digest from the file it published and checks it against the publication's
    `content_sha256` before it writes the case. Link and regeneration phases use
-   `untilChanged` cases that poll while Editarr changes the file.
-3. `verify.py cleanup <evidence>` in the journey's `finally`.
+   `untilChanged` cases that poll while Editarr changes the file. The failure
+   withdrawal phase orders the poll's `timeline` against Editarr's export states.
+   Editarr refuses a phase whose record already exists, and accepts only exit 0
+   with a passing record whose case names equal the cases it wrote.
+3. `verify.py cleanup-label editarr.verify.run=<run>` in the journey's `finally`,
+   even when launch failed or timed out partway. Editarr kills the helper's whole
+   process group on a timeout, so no Docker command outlives it.
 
 `VERIFY_PLUGIN_LABELS=KEY=VALUE[,KEY=VALUE]` adds Docker labels for a task.
 Exit 2 from launch (no Docker, no image, no helper) makes the Editarr journey

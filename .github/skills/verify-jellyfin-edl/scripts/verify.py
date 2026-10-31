@@ -15,8 +15,11 @@ Usage:
   verify.py matrix EVIDENCE_DIR CASES_JSON LABEL
                                      request the caller's cases and write matrix-LABEL.json
   verify.py cleanup EVIDENCE_DIR     remove run-owned resources, keep evidence
+  verify.py cleanup-label KEY=VALUE  clean up every run launched with --label KEY=VALUE,
+                                     including one whose launch was killed before it finished
 
 Every command accepts --label KEY=VALUE (repeatable) to add a Docker label to all it creates.
+`launch` prints its evidence directory before starting anything, and again when ready.
 
 Exit codes: 0 pass, 1 fail, 2 blocked prerequisite, 64 usage.
 """
@@ -316,6 +319,37 @@ def finish(directory: Path, run: dict) -> bool:
     return report["clean"]
 
 
+def cleanup_label(label: str) -> bool:
+    """Finish every run recorded with label, then confirm Docker holds nothing carrying it.
+
+    A caller that killed a launch midway owns its runs only through the label it
+    passed, so this is how it reclaims them. Runs that never reached a container
+    need no Docker query, which keeps a blocked daemon from failing the cleanup.
+    """
+    matched = [directory for directory in sorted(EVIDENCE_ROOT.glob("jfedl-*"))
+               if (directory / "run.json").exists() and label in evidence.read_json(directory / "run.json").get("labels", [])]
+    clean, created = True, False
+    for directory in matched:
+        run = evidence.read_json(directory / "run.json")
+        created = created or bool(run.get("container"))
+        try:
+            finished = finish(directory, run)
+        except Exception as error:
+            finished = False
+            print(f"cleanup {directory.name} failed: {type(error).__name__}: {error}")
+        print(f"cleanup {directory.name} clean: {finished}\nevidence: {directory}")
+        clean = clean and finished
+    if created:
+        found = [instance.docker(*args, "--filter", f"label={label}", check=False)
+                 for args in (("ps", "-aq"), ("volume", "ls", "-q"))]
+        leftovers = [name for result in found for name in result.stdout.split()]
+        if any(result.returncode for result in found) or leftovers:
+            clean = False
+            print(f"labelled leftovers: {leftovers or 'docker query failed'}")
+    print(f"cleanup-label {label}: {len(matched)} runs, clean: {clean}")
+    return clean
+
+
 def command_run(argv: list) -> int:
     directory, run = new_run("jellyfin-http")
     if "--port" in argv:
@@ -378,6 +412,7 @@ def main(argv: list) -> int:
             return 64
         run["labels"] = instance.EXTRA_LABELS
         save(directory, run)
+        print(f"evidence: {directory}", flush=True)
         try:
             launch(directory, run)
         except Exception as error:
@@ -393,6 +428,8 @@ def main(argv: list) -> int:
         except Exception as error:
             print(f"matrix failed: {type(error).__name__}: {error}")
             return 1
+    if command == "cleanup-label" and len(rest) == 1 and "=" in rest[0] and not rest[0].startswith("="):
+        return 0 if cleanup_label(rest[0]) else 1
     if command in ("doctor", "drive", "cleanup") and len(rest) == 1:
         directory = Path(rest[0]).resolve()
         try:

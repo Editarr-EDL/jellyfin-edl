@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
+import io
+import json
 import tempfile
 import unittest
 import unittest.mock
@@ -125,6 +128,19 @@ class RunTests(unittest.TestCase):
                               clock=lambda: next(ticks), pause=lambda _: None)
         self.assertFalse(result["ok"])
 
+    def test_a_repeating_case_records_when_each_answer_run_was_sent_and_answered(self):
+        new = b"5 6 3\n"
+        switch = FakeClient([jellyfin_api.Response(200, PRIVATE, OWN)] * 2 + [jellyfin_api.Response(200, PRIVATE, new)])
+        ticks = iter(range(100, 200))
+        [result] = matrix.run({"admin": switch}, ITEMS, [case(principal="admin", untilChanged=True)],
+                              pause=lambda _: None, now=lambda: next(ticks))
+        self.assertEqual(result["timeline"], [
+            {"status": 200, "bodySha256": OWN_SHA, "answers": 2, "firstSentAt": 100, "firstReceivedAt": 101,
+             "lastSentAt": 102, "lastReceivedAt": 103},
+            {"status": 200, "bodySha256": hashlib.sha256(new).hexdigest(), "answers": 1, "firstSentAt": 104,
+             "firstReceivedAt": 105, "lastSentAt": 104, "lastReceivedAt": 105},
+        ])
+
     def test_until_changed_must_start_on_an_accepted_digest(self):
         client = FakeClient([jellyfin_api.Response(200, PRIVATE, b"other\n")])
         [result] = matrix.run({"admin": client}, ITEMS, [case(principal="admin", untilChanged=True)], pause=lambda _: None)
@@ -173,6 +189,74 @@ class InteropOptionTests(unittest.TestCase):
         self.assertEqual(verify.main(["launch", "--bogus", "x"]), 64)
         self.assertEqual(verify.main(["launch", "--label", "novalue"]), 64)
         self.assertEqual(verify.main(["matrix", "a", "b"]), 64)
+        self.assertEqual(verify.main(["cleanup-label", "novalue"]), 64)
+
+
+class LabelledRecoveryTests(unittest.TestCase):
+    """A caller that killed a launch reclaims it by the label it passed."""
+
+    def setUp(self):
+        self.root = Path(tempfile.mkdtemp())
+        self.addCleanup(lambda: __import__("shutil").rmtree(self.root))
+        patch = unittest.mock.patch.object(verify, "EVIDENCE_ROOT", self.root)
+        patch.start()
+        self.addCleanup(patch.stop)
+        self.finished = []
+
+    def record(self, name, labels, **fields):
+        (self.root / name).mkdir()
+        (self.root / name / "run.json").write_text(json.dumps({"runId": name, "labels": labels, **fields}))
+
+    def cleanup(self, label, finish=lambda directory, run: True, docker=None):
+        def finishing(directory, run):
+            self.finished.append(directory.name)
+            return finish(directory, run)
+
+        output = io.StringIO()
+        docker = docker or (lambda *args, **_: unittest.mock.Mock(returncode=0, stdout=""))
+        with unittest.mock.patch.object(verify, "finish", finishing), \
+                unittest.mock.patch.object(instance, "docker", docker), contextlib.redirect_stdout(output):
+            code = verify.main(["cleanup-label", label])
+        return code, output.getvalue()
+
+    def test_only_runs_carrying_the_label_are_finished(self):
+        self.record("jfedl-1-a", ["editarr.verify.run=x", "mu44.task=mu-44"], container="jfedl-1-a-jellyfin")
+        self.record("jfedl-2-b", ["editarr.verify.run=y"], container="jfedl-2-b-jellyfin")
+        code, output = self.cleanup("editarr.verify.run=x")
+        self.assertEqual((code, self.finished), (0, ["jfedl-1-a"]))
+        self.assertIn(f"evidence: {self.root / 'jfedl-1-a'}", output)
+
+    def test_a_failed_finish_or_a_labelled_leftover_is_not_clean(self):
+        self.record("jfedl-1-a", ["editarr.verify.run=x"], container="jfedl-1-a-jellyfin")
+
+        def broken(directory, run):
+            raise RuntimeError("scratch gone")
+
+        self.assertEqual(self.cleanup("editarr.verify.run=x", finish=broken)[0], 1)
+        leftover = lambda *args, **_: unittest.mock.Mock(returncode=0, stdout="abc\n" if args[0] == "ps" else "")
+        code, output = self.cleanup("editarr.verify.run=x", docker=leftover)
+        self.assertEqual(code, 1)
+        self.assertIn("abc", output)
+
+    def test_a_run_blocked_before_any_container_needs_no_daemon(self):
+        self.record("jfedl-1-a", ["editarr.verify.run=x"])
+        unreachable = lambda *args, **_: unittest.mock.Mock(returncode=1, stdout="")
+        self.assertEqual(self.cleanup("editarr.verify.run=x", docker=unreachable)[0], 0)
+
+    def test_launch_names_its_evidence_before_it_starts_anything(self):
+        output = io.StringIO()
+
+        def launching(directory, run):
+            self.assertIn(f"evidence: {directory}", output.getvalue())
+            raise instance.Blocked("docker daemon is not reachable")
+
+        with unittest.mock.patch.object(verify, "launch", launching), \
+                unittest.mock.patch.object(verify, "finish", lambda directory, run: True), \
+                unittest.mock.patch.object(verify, "git", lambda *args: "c"), \
+                unittest.mock.patch.object(instance, "EXTRA_LABELS", []), contextlib.redirect_stdout(output):
+            self.assertEqual(verify.main(["launch", "--label", "editarr.verify.run=x"]), 2)
+        [directory] = self.root.iterdir()
+        self.assertIn("editarr.verify.run=x", json.loads((directory / "run.json").read_text())["labels"])
 
 
 if __name__ == "__main__":
