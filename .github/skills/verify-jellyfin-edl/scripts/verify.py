@@ -193,6 +193,9 @@ def command_matrix(directory: Path, cases_file: Path, label: str) -> bool:
     """Run caller cases against a launched instance and write matrix-LABEL.json."""
     if not label.replace("-", "").isalnum() or not label.islower():
         raise ValueError("LABEL must be lowercase letters, digits, and hyphens")
+    output = directory / f"matrix-{label}.json"
+    if output.exists():
+        raise FileExistsError(f"{output} already records matrix {label}; use a new label")
     run = evidence.read_json(directory / "run.json")
     state = evidence.read_json(directory / "items.json")
     cases = matrix.load_cases(evidence.read_json(cases_file), state["items"])
@@ -201,7 +204,7 @@ def command_matrix(directory: Path, cases_file: Path, label: str) -> bool:
                **{name: client_for(run, hidden[f"{name}Token"]) for name in journey.USERS}}
     checks = matrix.run(clients, state["items"], cases)
     ok = all(check["ok"] for check in checks)
-    evidence.write_json(directory / f"matrix-{label}.json", {"ok": ok, "users": state["users"], "checks": checks})
+    evidence.write_json(output, {"ok": ok, "users": state["users"], "checks": checks})
     failed = [check["check"] for check in checks if not check["ok"]]
     print(f"matrix {label} {'ok' if ok else 'FAILED'}: {len(checks) - len(failed)}/{len(checks)} checks pass"
           + (f"; failed: {failed}" if failed else ""))

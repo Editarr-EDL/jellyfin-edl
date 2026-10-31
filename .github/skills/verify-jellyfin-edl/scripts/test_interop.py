@@ -191,6 +191,19 @@ class InteropOptionTests(unittest.TestCase):
         self.assertEqual(verify.main(["matrix", "a", "b"]), 64)
         self.assertEqual(verify.main(["cleanup-label", "novalue"]), 64)
 
+    def test_a_label_with_a_record_is_refused_before_any_request(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            record = root / "matrix-phase.json"
+            record.write_text('{"ok": true, "checks": ["earlier"]}')
+            output = io.StringIO()
+            with unittest.mock.patch.object(verify, "client_for", side_effect=AssertionError("sent a request")), \
+                    unittest.mock.patch.object(matrix, "run", side_effect=AssertionError("ran the matrix")), \
+                    contextlib.redirect_stdout(output):
+                self.assertEqual(verify.main(["matrix", str(root), str(root / "cases.json"), "phase"]), 1)
+            self.assertIn("already records matrix phase", output.getvalue())
+            self.assertEqual(record.read_text(), '{"ok": true, "checks": ["earlier"]}')
+
 
 class LabelledRecoveryTests(unittest.TestCase):
     """A caller that killed a launch reclaims it by the label it passed."""

@@ -67,7 +67,7 @@ python3 .github/skills/verify-jellyfin-edl/scripts/verify.py matrix artifacts/ve
 scripts/run-edl-matrix.sh artifacts/verify/<run-id> CASES.json LABEL
 ```
 
-`scripts/matrix.py` documents the case format: name, principal (`userA`, `userB`, `admin`, `apiKey`, `anonymous`), format, media path, optional `version` media path for `mediaSourceId`, expected status, acceptable SHA-256 set for a 200, optional `ifNoneMatch` naming an earlier case, and optional `until` or `untilChanged` repetition. A repeating case fails on any answer that is not a 200 with the route's headers, so it proves there was no gap while a file was replaced. The caller supplies every expectation; the matrix requests, compares, and writes `matrix-LABEL.json`. Exit 0 means every case matched. Tokens come from scratch `secrets.json` and never reach argv or evidence.
+`scripts/matrix.py` documents the case format: name, principal (`userA`, `userB`, `admin`, `apiKey`, `anonymous`), format, media path, optional `version` media path for `mediaSourceId`, expected status, acceptable SHA-256 set for a 200, optional `ifNoneMatch` naming an earlier case, and optional `until` or `untilChanged` repetition. A repeating case fails on any answer that is not a 200 with the route's headers, so it proves there was no gap while a file was replaced. The caller supplies every expectation; the matrix requests, compares, and writes `matrix-LABEL.json`. Exit 0 means every case matched. A label that already has a record exits 1 before any request and leaves that record alone. Tokens come from scratch `secrets.json` and never reach argv or evidence.
 
 ## Doctor
 
