@@ -54,12 +54,12 @@ the original for an earlier plugin build until you upgrade.
   --plugin-interop` journey and this repository's `verify.py matrix`.
 - An Editarr release from before multi-user support writes only the adjacent
   `Movie.edl`, which this plugin never reads. Earlier plugin builds read only that
-  adjacent file. To keep EDL playback without a gap, upgrade Editarr first, copy
-  or export the files into the new layout while the earlier plugin still serves
-  the adjacent files, and then install this plugin. If you install this plugin
-  first, players get no EDL until each file is in the new layout. No file is
-  lost in either order. Editarr's multi-user guide gives the full procedure and
-  a bulk copy command.
+  adjacent file. To keep EDL playback without a gap, stop Editarr, copy the
+  files into the new layout while the earlier plugin still serves the adjacent
+  files, upgrade Editarr, and then install this plugin. If you install this
+  plugin first, players get no EDL until each file is in the new layout. No file
+  is lost in either order. Editarr's multi-user guide gives the full procedure
+  and a copy script that never replaces an existing file.
 
 ## API Contract
 
