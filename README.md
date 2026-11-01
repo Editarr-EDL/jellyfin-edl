@@ -35,10 +35,10 @@ them may be symbolic links to folders elsewhere.
 An API key's response depends only on the default file. It never reads a personal
 file, so it neither returns personal bytes nor reveals whether personal files exist.
 
-Upgrading from a release that served adjacent `Movie.edl` files: those files
-stay on disk but are no longer served. Move them to `edl/Movie.edl`, or export
-again from Editarr, to make them available. An adjacent `Movie.mcf` is never
-served either; move it to `mcf/Movie.mcf`.
+This plugin never serves an adjacent `Movie.edl` or `Movie.mcf`, which earlier
+releases used. Those files stay on disk. To make one available, copy it to
+`edl/Movie.edl` or `mcf/Movie.mcf`, or export it again from Editarr. A copy keeps
+the original for an earlier plugin build until you upgrade.
 
 ## Compatibility
 
@@ -47,13 +47,19 @@ served either; move it to `mcf/Movie.mcf`.
   `jellyfin/jellyfin:12.0.0` image pinned by digest
   `sha256:baba630419915985442f315f08b0cf46d9f4c8a0cc4bd38e94a6d35751dd5ef5`.
 - Editarr with multi-user support. Both sides follow the export layout contract
-  `export-layout-v1` (`tests/fixtures/export-layout-v1/`). The pair proven
+  `editarr-export-layout-1`. Its shared cases live in the
+  `tests/fixtures/export-layout-v1/` directory. The pair proven
   together is this plugin at `afba34e` with Editarr `39eb1b32`, both on their
   `multi-user/implementation` branches, by the Editarr `verify.mjs auth
   --plugin-interop` journey and this repository's `verify.py matrix`.
 - An Editarr release from before multi-user support writes only the adjacent
-  `Movie.edl`, which this plugin never reads. Upgrade Editarr and the plugin
-  together, then move or export the files again as described above.
+  `Movie.edl`, which this plugin never reads. Earlier plugin builds read only that
+  adjacent file. To keep EDL playback without a gap, upgrade Editarr first, copy
+  or export the files into the new layout while the earlier plugin still serves
+  the adjacent files, and then install this plugin. If you install this plugin
+  first, players get no EDL until each file is in the new layout. No file is
+  lost in either order. Editarr's multi-user guide gives the full procedure and
+  a bulk copy command.
 
 ## API Contract
 
