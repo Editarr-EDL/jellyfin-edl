@@ -40,6 +40,21 @@ stay on disk but are no longer served. Move them to `edl/Movie.edl`, or export
 again from Editarr, to make them available. An adjacent `Movie.mcf` is never
 served either; move it to `mcf/Movie.mcf`.
 
+## Compatibility
+
+- Jellyfin 12.0. The plugin builds against `Jellyfin.Controller` and
+  `Jellyfin.Model` 12.0.0 on .NET 10. The live checks run the
+  `jellyfin/jellyfin:12.0.0` image pinned by digest
+  `sha256:baba630419915985442f315f08b0cf46d9f4c8a0cc4bd38e94a6d35751dd5ef5`.
+- Editarr with multi-user support. Both sides follow the export layout contract
+  `export-layout-v1` (`tests/fixtures/export-layout-v1/`). The pair proven
+  together is this plugin at `afba34e` with Editarr `39eb1b32`, both on their
+  `multi-user/implementation` branches, by the Editarr `verify.mjs auth
+  --plugin-interop` journey and this repository's `verify.py matrix`.
+- An Editarr release from before multi-user support writes only the adjacent
+  `Movie.edl`, which this plugin never reads. Upgrade Editarr and the plugin
+  together, then move or export the files again as described above.
+
 ## API Contract
 
 - Routes: `GET /Plugins/Edl/ByItem/{itemId}?mediaSourceId={versionId}` for EDL and
@@ -211,7 +226,12 @@ JELLYFIN_USER_TOKEN="<user_access_token>" JELLYFIN_ITEM_ID="<guid_without_edl>" 
 JELLYFIN_USER_TOKEN="<user_access_token>" JELLYFIN_ITEM_ID="<guid_with_invalid_edl>" EXPECTED_STATUS="422" ./scripts/jellyfin-smoke.sh
 ```
 
-Run the full 200/404/422 matrix in one command:
+Run per-user EDL and MCF cases against an isolated `verify.py launch` with
+`./scripts/run-edl-matrix.sh EVIDENCE_DIR CASES_JSON LABEL`. The
+[verify-jellyfin-edl skill](.github/skills/verify-jellyfin-edl/SKILL.md) describes the
+case format and the paired Editarr journey.
+
+Run the original single-token 200/404/422 matrix in one command:
 
 ```bash
 JELLYFIN_USER_TOKEN="<user_access_token>" \

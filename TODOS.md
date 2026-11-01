@@ -3,7 +3,8 @@
 ## Remaining From Plan Verification
 
 - [x] Run plugin in a live Jellyfin instance and confirm plugin loads and endpoint is discoverable.
-- [ ] Perform end-to-end API checks with real item IDs:
+- [x] Perform end-to-end API checks with real item IDs (`verify.py run` and the
+  per-user `verify.py matrix` cover these in a disposable Jellyfin 12.0.0):
   - valid video item with valid sidecar returns 200 text/plain
   - missing sidecar returns 404
   - non-video item returns 404
