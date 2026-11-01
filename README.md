@@ -48,10 +48,15 @@ the original for an earlier plugin build until you upgrade.
   `sha256:baba630419915985442f315f08b0cf46d9f4c8a0cc4bd38e94a6d35751dd5ef5`.
 - Editarr with multi-user support. Both sides follow the export layout contract
   `editarr-export-layout-1`. Its shared cases live in the
-  `tests/fixtures/export-layout-v1/` directory. The pair proven
-  together is this plugin at `afba34e` with Editarr `39eb1b32`, both on their
-  `multi-user/implementation` branches, by the Editarr `verify.mjs auth
-  --plugin-interop` journey and this repository's `verify.py matrix`.
+  `tests/fixtures/export-layout-v1/` directory. The verified pair is this
+  plugin at `9127daf` with Editarr `a617b836`, both on their
+  `multi-user/implementation` branches. The Editarr wave 17 combined run tested
+  this plugin with Editarr `f8122834`. That run passed the Editarr `verify.mjs
+  auth --plugin-interop` journey, which drives this repository's `verify.py
+  matrix`, and this repository's helper unit tests.
+  `a617b836` changes only formatting in Editarr test, script, and verifier
+  files. The commits after the pair in both repositories change only
+  documentation and task records.
 - An Editarr release from before multi-user support writes only the adjacent
   `Movie.edl`, which this plugin never reads. Earlier plugin builds read only that
   adjacent file. To keep EDL playback without a gap, stop Editarr, copy the
