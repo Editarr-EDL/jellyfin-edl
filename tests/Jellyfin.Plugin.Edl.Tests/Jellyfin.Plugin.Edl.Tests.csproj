@@ -25,4 +25,8 @@
   <ItemGroup>
     <ProjectReference Include="../../src/Jellyfin.Plugin.Edl/Jellyfin.Plugin.Edl.csproj" />
   </ItemGroup>
+
+  <ItemGroup>
+    <None Include="../fixtures/export-layout-v1/**" LinkBase="fixtures/export-layout-v1" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
 </Project>

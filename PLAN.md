@@ -1,5 +1,9 @@
 ## Plan: Jellyfin EDL Plugin Subagent Waves
 
+This is the original single-user plan, kept as a historical record. The plugin now
+serves per-user and item-default EDL and MCF files from `edl/` and `mcf/` folders and
+never reads the same-folder sidecar this plan describes; see [README.md](README.md).
+
 Deliver a Jellyfin plugin endpoint that accepts a library item ID and returns a same-folder EDL sidecar as text/plain when valid, with 404 for missing or not-eligible items and 422 for invalid EDL content. Work is split into dependency-aware waves so independent tracks run in parallel and merge cleanly.
 
 ### Scope and Constraints

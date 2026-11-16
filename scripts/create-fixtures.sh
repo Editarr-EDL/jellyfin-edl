@@ -8,7 +8,7 @@ VALID_DIR="$MEDIA_ROOT/valid"
 MISSING_DIR="$MEDIA_ROOT/missing"
 INVALID_DIR="$MEDIA_ROOT/invalid"
 
-mkdir -p "$VALID_DIR" "$MISSING_DIR" "$INVALID_DIR"
+mkdir -p "$VALID_DIR/edl" "$MISSING_DIR" "$INVALID_DIR/edl"
 
 # Placeholder files are enough for path/EDL sidecar validation during API flow checks.
 # Replace these with real media files later if you want playback-level validation.
@@ -16,21 +16,21 @@ touch "$VALID_DIR/valid.mkv"
 touch "$MISSING_DIR/missing.mkv"
 touch "$INVALID_DIR/invalid.mkv"
 
-cat > "$VALID_DIR/valid.edl" <<'EOF'
+cat > "$VALID_DIR/edl/valid.edl" <<'EOF'
 10.000 20.000 cut
 30 35 mute
 EOF
 
-cat > "$INVALID_DIR/invalid.edl" <<'EOF'
+cat > "$INVALID_DIR/edl/invalid.edl" <<'EOF'
 abc 20 cut
 10 5 mute
 EOF
 
 cat > "$MEDIA_ROOT/README.txt" <<'EOF'
 Fixture folders:
-- valid/valid.mkv + valid.edl (expected API status 200)
-- missing/missing.mkv with no sidecar (expected API status 404)
-- invalid/invalid.mkv + invalid.edl (expected API status 422)
+- valid/valid.mkv + edl/valid.edl default (expected API status 200)
+- missing/missing.mkv with no export (expected API status 404)
+- invalid/invalid.mkv + edl/invalid.edl default (expected API status 422)
 
 Notes:
 1. In Jellyfin admin, add /media as a library path in the running dev container.

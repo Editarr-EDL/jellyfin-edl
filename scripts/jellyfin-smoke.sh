@@ -2,7 +2,7 @@
 set -euo pipefail
 
 BASE_URL="${JELLYFIN_BASE_URL:-http://localhost:8096}"
-API_KEY="${JELLYFIN_API_KEY:-}"
+USER_TOKEN="${JELLYFIN_USER_TOKEN:-}"
 ITEM_ID="${JELLYFIN_ITEM_ID:-}"
 EXPECTED_STATUS="${EXPECTED_STATUS:-200}"
 
@@ -39,8 +39,8 @@ else
   exit 1
 fi
 
-if [[ -z "$API_KEY" || -z "$ITEM_ID" ]]; then
-  log "Skipping authenticated endpoint call. Set JELLYFIN_API_KEY and JELLYFIN_ITEM_ID to enable full check."
+if [[ -z "$USER_TOKEN" || -z "$ITEM_ID" ]]; then
+  log "Skipping authenticated endpoint call. Set JELLYFIN_USER_TOKEN and JELLYFIN_ITEM_ID to enable full check."
   exit 0
 fi
 
@@ -49,7 +49,7 @@ TMP_BODY="$(mktemp)"
 trap 'rm -f "$TMP_HEADERS" "$TMP_BODY"' EXIT
 
 STATUS="$(curl -sS -o "$TMP_BODY" -D "$TMP_HEADERS" \
-  -H "X-Emby-Token: $API_KEY" \
+  -H "X-Emby-Token: $USER_TOKEN" \
   "$BASE_URL/Plugins/Edl/ByItem/$ITEM_ID" \
   -w "%{http_code}")"
 

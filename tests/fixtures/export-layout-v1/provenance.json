@@ -1,0 +1,13 @@
+{
+  "contract": "editarr-export-layout-1",
+  "manifestSha256": "c3063858e3ecf2f8982c66a1140f52ab7d806e737ff5c7854b413cdecccf987e",
+  "files": 14,
+  "source": {
+    "repository": "Editarr",
+    "path": "tests/fixtures/multi-user/export-layout-v1",
+    "commit": "0cef1043b7ce0559ff22f49bffdfa9bea1da48d3",
+    "lastChangedIn": "4827bd9c3e57d7afad13b315d04decdda7140012",
+    "tree": "ef5fd31bcdb3c8f28417cb36b50d674db6a1d95a"
+  },
+  "rule": "manifest.json and payloads/ are byte-exact copies. Replace the directory from a new Editarr contract version instead of editing it."
+}
