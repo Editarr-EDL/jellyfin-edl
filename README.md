@@ -40,6 +40,22 @@ releases used. Those files stay on disk. To make one available, copy it to
 `edl/Movie.edl` or `mcf/Movie.mcf`, or export it again from Editarr. A copy keeps
 the original for an earlier plugin build until you upgrade.
 
+### Install in Jellyfin
+
+1. As a Jellyfin administrator, open **Dashboard → Plugins → Repositories**
+   and add a repository named **Editarr EDL** with this URL.
+
+   ```text
+   https://raw.githubusercontent.com/Editarr-EDL/jellyfin-edl/main/manifest.json
+   ```
+
+2. Open **Plugins → Catalog**, select **EDL Sidecar API**, and click **Install**.
+3. Restart Jellyfin and confirm that **EDL Sidecar API** appears under
+   **My Plugins**.
+
+The catalog release targets Jellyfin 12.0. If you use an older version of the
+plugin with Editarr, follow the upgrade order in [Compatibility](#compatibility).
+
 ## Compatibility
 
 - Jellyfin 12.0. The plugin builds against `Jellyfin.Controller` and
@@ -265,6 +281,15 @@ Stop services:
 ```bash
 docker compose down
 ```
+
+## Publishing Catalog Updates
+
+Upload the plugin ZIP to a public, versioned GitHub release, then add its entry
+at the top of `versions` in [`manifest.json`](manifest.json). Match `version` to
+the DLL's four-part assembly version and set `targetAbi` to the Jellyfin ABI
+used to build it. Set `sourceUrl` to the tagged release asset and compute
+`checksum` from that exact ZIP with `openssl dgst -md5 <plugin-zip>`. Keep the
+existing entries so Jellyfin can offer earlier compatible versions.
 
 ## Notes and Limitations
 
